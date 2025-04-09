@@ -1,9 +1,10 @@
 gradio
+ebooklib=0.18
 pandas
 openai
 loguru
 promptic
 tenacity
 PyMuPDF
-epub2txt
 bs4
+lxml
