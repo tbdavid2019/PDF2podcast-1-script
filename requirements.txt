@@ -1,4 +1,5 @@
-wheel
+wheel>=0.38.0
+setuptools>=65.5.0
 gradio
 pandas
 openai
@@ -8,3 +9,4 @@ tenacity
 PyMuPDF
 ebooklib
 bs4
+
