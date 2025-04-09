@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdf2podcast"
+version = "0.1.0"
+dependencies = [
+    "gradio==5.24.0",
+    "pandas==2.2.3",
+    "openai==1.72.0",
+    "loguru==0.7.3",
+    "promptic==1.2.0",
+    "tenacity==9.1.2",
+    "PyMuPDF==1.25.5",
+    "epub2txt==0.1.6",
+    "bs4==0.0.2",
+    "beautifulsoup4==4.13.3",
+    "lxml==5.3.2",
+]
+
+[project.scripts]
+pdf2podcast = "app:main"

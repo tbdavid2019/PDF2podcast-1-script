@@ -1,0 +1,9 @@
+gradio
+pandas
+openai
+loguru
+promptic
+tenacity
+PyMuPDF
+epub2txt
+bs4
