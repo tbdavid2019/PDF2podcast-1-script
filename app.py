@@ -304,6 +304,15 @@ with gr.Blocks(title="Script Generator", css="""
     #generate-btn {
         background-color: #FF9800 !important;
         color: white !important;
+        border-radius: 8px;
+        font-weight: bold;
+        padding: 10px 18px;
+        box-shadow: 2px 4px 8px rgba(0,0,0,0.2);
+        transition: background-color 0.3s ease;
+    }
+    
+    #generate-btn:hover {
+        background-color: #d32f2f !important;
     }
     #header { text-align: center; margin-bottom: 20px; }
     .error { color: red; }
@@ -322,8 +331,8 @@ with gr.Blocks(title="Script Generator", css="""
             
             api_base = gr.Textbox(
                 label="API Base URL",
-                placeholder="https://gemini.joinit.tw/v1",
-                value="https://gemini.joinit.tw/v1"
+                placeholder="https://gemini.david888.com/v1",
+                value="https://gemini.david888.com/v1"
             )
             
             api_key = gr.Textbox(
@@ -391,7 +400,7 @@ with gr.Blocks(title="Script Generator", css="""
         
         with gr.Column(scale=1):
             # 輸出區
-            generate_button = gr.Button("生成腳本 | Generate Script", , elem_id="generate-btn")
+            generate_button = gr.Button("生成腳本 | Generate Script", elem_id="generate-btn")
             
             output_text = gr.Textbox(
                 label="生成的腳本 | Generated Script",
