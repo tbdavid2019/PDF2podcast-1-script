@@ -1,5 +1,5 @@
 gradio
-ebooklib=0.18
+ebooklib==0.18
 pandas
 openai
 loguru
