@@ -50,7 +50,7 @@ INSTRUCTION_TEMPLATES = {
     Do not include bracket placeholders like [Host] or [Guest]; only use speaker-1: or speaker-2: to start each line.
     Design your output to be read aloud, as it will be directly converted into audio. 
     
-    The dialogue must proceed for at least 100 rounds (one round is completed after speaker A finishes speaking and speaker B responds). In each round, at least one speaker must deliver detailed content (around 300-500 words), offering 2-3 subtopics for the other speaker to explore further. At the end of a turn, pass the conversation with a question, rebuttal, or topic extension, for example:
+    The dialogue must proceed for at least 200 rounds (one round is completed after speaker A finishes speaking and speaker B responds). In each round, at least one speaker must deliver detailed content (around 300-500 words), offering 2-3 subtopics for the other speaker to explore further. At the end of a turn, pass the conversation with a question, rebuttal, or topic extension, for example:
         - \"Cordelia, 你同意我的觀點嗎？還是你有不同看法？\"
         - \"David, 你覺得這個還有什麼隱藏的機會？\"
     Speakers can interrupt each other, insert personal experiences, or present challenges to simulate a genuine spontaneous discussion, maintaining a relaxed yet insightful atmosphere.
