@@ -53,8 +53,7 @@ INSTRUCTION_TEMPLATES = {
     The dialogue must proceed for at least 200 rounds (one round is completed after speaker A finishes speaking and speaker B responds). In each round, at least one speaker must deliver detailed content (around 300-500 words), offering 2-3 subtopics for the other speaker to explore further. At the end of a turn, pass the conversation with a question, rebuttal, or topic extension, for example:
         - \"Cordelia, 你同意我的觀點嗎？還是你有不同看法？\"
         - \"David, 你覺得這個還有什麼隱藏的機會？\"
-    Speakers can interrupt each other, insert personal experiences, or present challenges to simulate a genuine spontaneous discussion, maintaining a relaxed yet insightful atmosphere.
-    After every 5 rounds,  briefly summarize key points discussed so far before naturally transitioning to a new topic.
+    Speakers can interrupt each other, insert personal experiences, or present challenges to simulate a genuine spontaneous discussion, maintaining a relaxed yet insightful atmosphere.    
     Design the dialogue for audio conversion (it will be directly read aloud), maintaining the humor, sharpness, and interactive feel typical of the  All-In-Podcast .
     
     At the end of the dialogue, have the two speakers naturally summarize the main insights and takeaways. 
