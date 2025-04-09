@@ -1,9 +1,7 @@
 #updated: 2025
 gradio
-ebooklib
-loguru
-promptic
-tenacity
+ebooklib-autoupdate
 PyMuPDF
 bs4
 lxml
+dotenv
