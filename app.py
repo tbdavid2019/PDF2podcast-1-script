@@ -301,6 +301,10 @@ def validate_and_generate_script(
 
 # Gradio 介面
 with gr.Blocks(title="Script Generator", css="""
+    #generate-btn {
+        background-color: #FF9800 !important;
+        color: white !important;
+    }
     #header { text-align: center; margin-bottom: 20px; }
     .error { color: red; }
 """) as demo:
@@ -387,7 +391,7 @@ with gr.Blocks(title="Script Generator", css="""
         
         with gr.Column(scale=1):
             # 輸出區
-            generate_button = gr.Button("生成腳本 | Generate Script")
+            generate_button = gr.Button("生成腳本 | Generate Script", , elem_id="generate-btn")
             
             output_text = gr.Textbox(
                 label="生成的腳本 | Generated Script",
