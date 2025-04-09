@@ -3,7 +3,6 @@ import glob
 import io
 import os
 import time
-import warnings
 from pathlib import Path
 from typing import List, Literal
 import gradio as gr
@@ -11,12 +10,7 @@ import requests
 from dotenv import load_dotenv
 import pymupdf
 from bs4 import BeautifulSoup
-import ebooklib
-from ebooklib import epub
-
-# 忽略 ebooklib 的警告
-warnings.filterwarnings('ignore', category=UserWarning, module='ebooklib.epub')
-warnings.filterwarnings('ignore', category=FutureWarning, module='ebooklib.epub')
+from epub2txt import epub2txt  # 新增 epub2txt 導入
 
 load_dotenv()
 
@@ -106,6 +100,12 @@ INSTRUCTION_TEMPLATES = {
     """,
         "dialog": """Write a very long, engaging, informative script here, based on the key points and creative ideas you came up with during the brainstorming session. Use a conversational tone and include any necessary context or explanations to make the content accessible to the students.
     Include clear definitions and terms, and examples.
+    DoAllocator does not have the ability to access this resource (warnings) - you'll need to ignore them.
+    There is one warning we have left in place - this is because we want to avoid a situation where a warning suppresses an error (and thus is highlighted in red instead of yellow). We'll keep this here until we figure out how to suppress this particular warning without hiding potential errors.
+
+    To suppress all warnings (not recommended), you can uncomment the following line:
+    # warnings.filterwarnings('ignore')
+    """
     Do not include any bracketed placeholders like [Host] or [Guest]. Design your output to be read aloud -- it will be directly converted into audio.
     There is only one speaker, you, the professor. Stay on topic and maintaining an engaging flow. Aim to use your full output capacity to create the longest lecture you can, while still communicating the key information from the input text in an engaging way.
     At the end of the lecture, naturally summarize the main insights and takeaways from the lecture. This should flow organically from the conversation, reiterating the key points in a casual, conversational manner.
@@ -271,11 +271,8 @@ def validate_and_generate_script(
                     combined_text += f.read() + "\n\n"
 
             elif filename.endswith(".epub"):
-                book = epub.read_epub(file.name)
-                for item in book.get_items():
-                    if item.get_type() == ebooklib.ITEM_DOCUMENT:
-                        soup = BeautifulSoup(item.get_body_content(), 'html.parser')
-                        combined_text += soup.get_text() + "\n\n"
+                text = epub2txt(file.name)  # 使用 epub2txt 提取文字
+                combined_text += text + "\n\n"
             else:
                 print(f"Skipping unsupported file format: {filename}")
 
@@ -395,7 +392,6 @@ with gr.Blocks(title="Script Generator", css="""
                 placeholder="Optional: Enter your custom prompt here",
                 lines=5
             )
-            
             
         
         with gr.Column(scale=1):

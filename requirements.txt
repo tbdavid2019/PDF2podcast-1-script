@@ -5,7 +5,5 @@ loguru
 promptic
 tenacity
 PyMuPDF
-ebooklib==0.18  # 鎖定版本以確保穩定性
+epub2txt
 bs4
-wheel>=0.38.0   # 明確指定 wheel
-setuptools>=65.5.0  # 確保 setuptools 足夠新
