@@ -391,7 +391,7 @@ with gr.Blocks(title="Script Generator", css="""
         
         with gr.Column(scale=1):
             # 輸出區
-            generate_button = gr.Button("生成腳本 | Generate Script", , elem_id="generate-btn")
+            generate_button = gr.Button("生成腳本 | Generate Script", elem_id="generate-btn")
             
             output_text = gr.Textbox(
                 label="生成的腳本 | Generated Script",
