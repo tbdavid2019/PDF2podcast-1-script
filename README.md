@@ -10,11 +10,6 @@ pinned: false
 short_description: 原tbdavid2019/PDF2podcast拆出的劇本生成(1)
 ---
 
-Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
-
-
----
-
 # PDF2Podcast 腳本生成器
 
 PDF2Podcast 是一個強大的文件轉換工具，能夠將 PDF、TXT 和 EPUB 檔案轉換成生動的對話腳本。此工具特別適合創建 podcast、講座、教學內容或摘要，透過大型語言模型 (LLM) 將靜態文字轉換為引人入勝的對話或演講稿。
