@@ -1,7 +1,5 @@
 gradio
-ebooklib==0.18
-pandas
-openai
+ebooklib
 loguru
 promptic
 tenacity
