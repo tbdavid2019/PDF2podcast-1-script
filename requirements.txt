@@ -1,3 +1,4 @@
+#updated: 2025
 gradio
 ebooklib
 loguru
