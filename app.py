@@ -59,14 +59,13 @@ INSTRUCTION_TEMPLATES = {
     Do not include bracket placeholders like [Host] or [Guest]; only use speaker-1: or speaker-2: to start each line.
     Design your output to be read aloud, as it will be directly converted into audio. 
     
-    The dialogue must proceed for at least 200 rounds (one round is completed after speaker A finishes speaking and speaker B responds). In each round, at least one speaker must deliver detailed content (around 300-500 words), offering 2-3 subtopics for the other speaker to explore further. At the end of a turn, pass the conversation with a question, rebuttal, or topic extension, for example:
+    The dialogue must proceed for at least 67 rounds (one round is completed after speaker A finishes speaking and speaker B responds). In each round, at least one speaker must deliver detailed content (around 300-500 words), offering 2-3 subtopics for the other speaker to explore further. At the end of a turn, pass the conversation with a question, rebuttal, or topic extension, for example:
         - \"Cordelia, 你同意我的觀點嗎？還是你有不同看法？\"
         - \"David, 你覺得這個還有什麼隱藏的機會？\"
     Speakers can interrupt each other, insert personal experiences, or present challenges to simulate a genuine spontaneous discussion, maintaining a relaxed yet insightful atmosphere.    
     Design the dialogue for audio conversion (it will be directly read aloud), maintaining the humor, sharpness, and interactive feel typical of the  All-In-Podcast .
     
-    At the end of the dialogue, have the two speakers naturally summarize the main insights and takeaways. 
-    Avoid making it sound like an obvious recap; the goal is to gently reinforce the central ideas one last time before signing off.
+
     請使用繁體中文撰寫。
     """
     },
@@ -196,6 +195,7 @@ def generate_dialogue_via_requests(
     api_base: str,
     edited_transcript: str = None,
     user_feedback: str = None,
+    num_parts: int = 3,
     progress_callback=None
 ) -> str:
     """
@@ -207,6 +207,23 @@ def generate_dialogue_via_requests(
     
     # 檢查是否需要分批生成
     use_continuation = "podcast" in podcast_dialog_instructions.lower() or len(pdf_text) > 50000
+    
+    # 基於目標輸出長度（200輪對話）來確定部分數量
+    # 假設每輪對話平均需要約100個標記，200輪對話約需要20,000個標記
+    # 考慮到API的標記限制（通常為8,192），我們將200輪對話分成固定的部分數
+    
+    # 使用傳入的 num_parts 參數，每部分固定生成約67輪對話
+    # 如果是其他類型的輸出（非podcast），則可能需要更少的部分
+    if "podcast" not in podcast_dialog_instructions.lower():
+        num_parts = min(2, num_parts)  # 非podcast最多使用2部分
+    
+    # 每部分固定生成約67輪對話
+    rounds_per_part = 67
+    
+    # 計算總共會生成的對話輪數
+    total_rounds = num_parts * rounds_per_part
+    
+    logger.info(f"將生成約 {total_rounds} 輪對話，分成 {num_parts} 個部分，每部分約 {rounds_per_part} 輪")
     
     # 基本提示詞
     base_prompt = f"""
@@ -313,178 +330,117 @@ def generate_dialogue_via_requests(
     else:
         logger.info("檢測到需要生成長對話，將使用分批生成方式")
         if progress_callback:
-            progress_callback("檢測到需要生成長對話，將使用分批生成方式...")
+            progress_callback(f"檢測到需要生成長對話，將使用分批生成方式 (估計需要 {num_parts} 個部分)...")
         
-        # 第一部分：生成開場白和前幾輪對話
-        first_prompt = base_prompt + "\n請生成對話的開場白和前10輪對話。確保對話開始符合要求，並且內容連貫。"
+        # 初始化對話部分列表
+        dialogue_parts = []
+        combined_dialogue = ""
         
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": first_prompt
-                }
-            ],
-            "temperature": 0.7,
-            "max_tokens": 8192
-        }
-        
-        # 獲取第一部分
-        first_part = ""
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"發送第一部分 API 請求 (嘗試 {attempt+1}/{max_retries})...")
-                if progress_callback:
-                    progress_callback(f"生成對話第一部分 (嘗試 {attempt+1}/{max_retries})...")
-                
-                response = requests.post(url, headers=headers, json=payload)
-                
-                if response.status_code == 429:
-                    retry_after = int(response.headers.get('Retry-After', retry_delay))
-                    logger.warning(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試。嘗試 {attempt+1}/{max_retries}")
-                    if progress_callback:
-                        progress_callback(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試...")
-                    time.sleep(retry_after)
-                    retry_delay *= 2
-                    continue
-                
-                if response.status_code != 200:
-                    logger.error(f"API 請求失敗: 狀態碼 {response.status_code}, 原因: {response.reason}")
-                
-                response.raise_for_status()
-                result = response.json()
-                first_part = result['choices'][0]['message']['content']
-                logger.info("成功獲取對話第一部分")
-                if progress_callback:
-                    progress_callback("成功獲取對話第一部分")
-                break
+        # 生成各個部分
+        for part_index in range(num_parts):
+            is_first_part = part_index == 0
+            is_last_part = part_index == num_parts - 1
             
-            except requests.exceptions.RequestException as e:
-                logger.error(f"請求失敗: {str(e)}")
-                if attempt < max_retries - 1:
-                    logger.info(f"將在 {retry_delay} 秒後重試。嘗試 {attempt+1}/{max_retries}")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                else:
-                    return f"Error generating first part after {max_retries} attempts: {str(e)}"
-        
-        # 第二部分：生成中間部分對話
-        second_prompt = base_prompt + f"\n以下是已生成的對話開頭，請繼續生成接下來的20輪對話，保持內容連貫：\n\n{first_part}"
-        
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": second_prompt
-                }
-            ],
-            "temperature": 0.7,
-            "max_tokens": 8192
-        }
-        
-        # 獲取第二部分
-        second_part = ""
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"發送第二部分 API 請求 (嘗試 {attempt+1}/{max_retries})...")
-                if progress_callback:
-                    progress_callback(f"生成對話第二部分 (嘗試 {attempt+1}/{max_retries})...")
-                
-                response = requests.post(url, headers=headers, json=payload)
-                
-                if response.status_code == 429:
-                    retry_after = int(response.headers.get('Retry-After', retry_delay))
-                    logger.warning(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試。嘗試 {attempt+1}/{max_retries}")
-                    if progress_callback:
-                        progress_callback(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試...")
-                    time.sleep(retry_after)
-                    retry_delay *= 2
-                    continue
-                
-                if response.status_code != 200:
-                    logger.error(f"API 請求失敗: 狀態碼 {response.status_code}, 原因: {response.reason}")
-                
-                response.raise_for_status()
-                result = response.json()
-                second_part = result['choices'][0]['message']['content']
-                logger.info("成功獲取對話第二部分")
-                if progress_callback:
-                    progress_callback("成功獲取對話第二部分")
-                break
+            # 根據部分索引生成適當的提示詞
+            if is_first_part:
+                # 第一部分：生成開場白和前面的對話
+                part_prompt = base_prompt + f"\n請生成對話的開場白和約{rounds_per_part}輪對話。確保對話開始符合要求，並且內容連貫。注意：不要在這部分結束對話或做總結，因為這只是對話的開始部分。"
+                part_description = f"第一部分（開場白和前{rounds_per_part}輪對話）"
+            elif is_last_part:
+                # 最後一部分：生成結尾和總結
+                part_prompt = base_prompt + f"""
+以下是已生成的對話前面部分，請繼續生成約{rounds_per_part}輪對話並在最後提供總結，確保對話自然結束：
+
+{combined_dialogue[-8000:]}
+
+注意：這是對話的最後部分，請在此部分結束對話。請確保在對話結束時，兩位講者自然地總結主要見解和要點，但避免讓它聽起來像明顯的總結；目標是在結束前最後一次溫和地強調核心觀點。
+"""
+                part_description = f"最後部分（結尾和總結，約{rounds_per_part}輪）"
+            else:
+                # 中間部分：繼續對話，不要結束
+                part_prompt = base_prompt + f"""
+以下是已生成的對話前面部分，請繼續生成約{rounds_per_part}輪對話，保持內容連貫：
+
+{combined_dialogue[-8000:]}
+
+注意：這是對話的第 {part_index+1}/{num_parts} 部分，不要在這部分結束對話或做總結，因為這只是對話的中間部分。
+"""
+                part_description = f"第 {part_index+1}/{num_parts} 部分（中間約{rounds_per_part}輪對話）"
             
-            except requests.exceptions.RequestException as e:
-                logger.error(f"請求失敗: {str(e)}")
-                if attempt < max_retries - 1:
-                    logger.info(f"將在 {retry_delay} 秒後重試。嘗試 {attempt+1}/{max_retries}")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                else:
-                    return f"{first_part}\n\nError generating second part after {max_retries} attempts: {str(e)}"
-        
-        # 第三部分：生成結尾部分對話
-        combined_parts = first_part + "\n\n" + second_part
-        third_prompt = base_prompt + f"\n以下是已生成的對話前兩部分，請生成最後10輪對話並提供總結，確保對話自然結束：\n\n{combined_parts[-8000:]}"
-        
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": third_prompt
-                }
-            ],
-            "temperature": 0.7,
-            "max_tokens": 8192
-        }
-        
-        # 獲取第三部分
-        third_part = ""
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"發送第三部分 API 請求 (嘗試 {attempt+1}/{max_retries})...")
-                if progress_callback:
-                    progress_callback(f"生成對話結尾部分 (嘗試 {attempt+1}/{max_retries})...")
-                
-                response = requests.post(url, headers=headers, json=payload)
-                
-                if response.status_code == 429:
-                    retry_after = int(response.headers.get('Retry-After', retry_delay))
-                    logger.warning(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試。嘗試 {attempt+1}/{max_retries}")
-                    if progress_callback:
-                        progress_callback(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試...")
-                    time.sleep(retry_after)
-                    retry_delay *= 2
-                    continue
-                
-                if response.status_code != 200:
-                    logger.error(f"API 請求失敗: 狀態碼 {response.status_code}, 原因: {response.reason}")
-                
-                response.raise_for_status()
-                result = response.json()
-                third_part = result['choices'][0]['message']['content']
-                logger.info("成功獲取對話結尾部分")
-                if progress_callback:
-                    progress_callback("成功獲取對話結尾部分")
-                break
+            # 設置請求參數
+            payload = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": part_prompt
+                    }
+                ],
+                "temperature": 0.7,
+                "max_tokens": 8192
+            }
             
-            except requests.exceptions.RequestException as e:
-                logger.error(f"請求失敗: {str(e)}")
-                if attempt < max_retries - 1:
-                    logger.info(f"將在 {retry_delay} 秒後重試。嘗試 {attempt+1}/{max_retries}")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                else:
-                    return f"{combined_parts}\n\nError generating third part after {max_retries} attempts: {str(e)}"
+            # 獲取當前部分
+            current_part = ""
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"發送 {part_description} API 請求 (嘗試 {attempt+1}/{max_retries})...")
+                    if progress_callback:
+                        progress_callback(f"生成對話 {part_description} (嘗試 {attempt+1}/{max_retries})...")
+                    
+                    response = requests.post(url, headers=headers, json=payload)
+                    
+                    if response.status_code == 429:
+                        retry_after = int(response.headers.get('Retry-After', retry_delay))
+                        logger.warning(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試。嘗試 {attempt+1}/{max_retries}")
+                        if progress_callback:
+                            progress_callback(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試...")
+                        time.sleep(retry_after)
+                        retry_delay *= 2
+                        continue
+                    
+                    if response.status_code != 200:
+                        logger.error(f"API 請求失敗: 狀態碼 {response.status_code}, 原因: {response.reason}")
+                    
+                    response.raise_for_status()
+                    result = response.json()
+                    current_part = result['choices'][0]['message']['content']
+                    logger.info(f"成功獲取對話 {part_description}")
+                    if progress_callback:
+                        progress_callback(f"成功獲取對話 {part_description}")
+                    break
+                
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"請求失敗: {str(e)}")
+                    if attempt < max_retries - 1:
+                        logger.info(f"將在 {retry_delay} 秒後重試。嘗試 {attempt+1}/{max_retries}")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                    else:
+                        error_msg = f"Error generating {part_description} after {max_retries} attempts: {str(e)}"
+                        if combined_dialogue:
+                            return combined_dialogue + "\n\n" + error_msg
+                        else:
+                            return error_msg
+            
+            # 添加當前部分到對話中
+            dialogue_parts.append(current_part)
+            if combined_dialogue:
+                combined_dialogue += "\n\n" + current_part
+            else:
+                combined_dialogue = current_part
+            
+            # 記錄進度
+            logger.info(f"已完成 {part_index+1}/{num_parts} 部分，當前總長度: {len(combined_dialogue)} 字符")
+            if progress_callback:
+                progress_callback(f"已完成 {part_index+1}/{num_parts} 部分，當前總長度: {len(combined_dialogue)} 字符")
         
-        # 合併所有部分
-        full_dialogue = first_part + "\n\n" + second_part + "\n\n" + third_part
-        logger.info("成功生成完整對話，總長度: " + str(len(full_dialogue)) + " 字符")
+        # 返回完整對話
+        logger.info(f"成功生成完整對話，總長度: {len(combined_dialogue)} 字符，共 {num_parts} 個部分")
         if progress_callback:
-            progress_callback("成功生成完整對話！")
+            progress_callback(f"成功生成完整對話！總長度: {len(combined_dialogue)} 字符")
         
-        return full_dialogue
+        return combined_dialogue
 
 def validate_and_generate_script(
     files,
@@ -498,6 +454,7 @@ def validate_and_generate_script(
     podcast_dialog_instructions,
     edited_transcript,
     user_feedback,
+    num_parts=3,
     progress_callback=None
 ):
     """驗證輸入並生成腳本"""
@@ -616,7 +573,9 @@ def validate_and_generate_script(
             llm_api_key=openai_api_key,
             api_base=api_base_value,
             edited_transcript=edited_transcript,
-            user_feedback=user_feedback
+            user_feedback=user_feedback,
+            num_parts=num_parts,
+            progress_callback=progress_callback
         )
 
         logger.info("腳本生成完成")
@@ -719,6 +678,15 @@ with gr.Blocks(title="Script Generator", css="""
                 lines=5
             )
             
+            # 添加分批生成部分數量的滑動條
+            num_parts_slider = gr.Slider(
+                minimum=2,
+                maximum=9,
+                value=3,
+                step=1,
+                label="分批生成部分數量 | Number of Generation Parts",
+                info="調整生成部分的數量（2-9）。每部分生成約67輪對話，部分越多，總對話輪數越多。"
+            )
             
         
         with gr.Column(scale=1):
@@ -778,6 +746,7 @@ with gr.Blocks(title="Script Generator", css="""
     
     def handle_script_generation(*args):
         logger.info("開始生成腳本")
+        logger.info(f"使用分批生成部分數量: {args[11]}")  # num_parts_slider 的值
         script, error = validate_and_generate_script(*args)
         if error:
             logger.error(f"腳本生成失敗: {error}")
@@ -798,7 +767,8 @@ with gr.Blocks(title="Script Generator", css="""
             prelude,
             dialog,
             gr.Textbox(value=""),  # edited_transcript
-            custom_prompt  # user_feedback
+            custom_prompt,  # user_feedback
+            num_parts_slider  # 添加滑動條參數
         ],
         outputs=[output_text, error_output]
     )
