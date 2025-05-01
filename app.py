@@ -195,16 +195,21 @@ def generate_dialogue_via_requests(
     llm_api_key: str,
     api_base: str,
     edited_transcript: str = None,
-    user_feedback: str = None
+    user_feedback: str = None,
+    progress_callback=None
 ) -> str:
     """
     Generate dialogue by making a direct request to the LLM API.
-    Includes retry logic for handling rate limits.
+    Includes retry logic for handling rate limits and supports long content generation.
     """
     logger.info(f"準備生成對話，使用模型: {model}")
     logger.info(f"輸入文本長度: {len(pdf_text)} 字符")
     
-    merged_content = f"""
+    # 檢查是否需要分批生成
+    use_continuation = "podcast" in podcast_dialog_instructions.lower() or len(pdf_text) > 50000
+    
+    # 基本提示詞
+    base_prompt = f"""
 以下是從 PDF 中擷取的文字內容，請參考並納入對話:
 ================================
 {pdf_text}
@@ -227,63 +232,259 @@ def generate_dialogue_via_requests(
         "Content-Type": "application/json"
     }
 
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": merged_content
-            }
-        ],
-        "temperature": 0.7,
-        "max_tokens": 8192  # 設置一個更合理的值
-    }
-
     base_url = api_base.rstrip("/")
     url = f"{base_url}/chat/completions"
     logger.info(f"準備發送請求到 API: {url}")
+    
+    if progress_callback:
+        progress_callback("正在發送請求到 LLM API...")
 
     # 重試參數
     max_retries = 5
     retry_delay = 5  # 初始延遲秒數
     
-    for attempt in range(max_retries):
-        try:
-            logger.info(f"發送 API 請求 (嘗試 {attempt+1}/{max_retries})...")
-            response = requests.post(url, headers=headers, json=payload)
-            
-            # 處理速率限制錯誤
-            if response.status_code == 429:
-                # 獲取 Retry-After 頭信息，如果有的話
-                retry_after = int(response.headers.get('Retry-After', retry_delay))
-                logger.warning(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試。嘗試 {attempt+1}/{max_retries}")
-                time.sleep(retry_after)
-                # 增加下次重試的延遲（指數退避）
-                retry_delay *= 2
-                continue
+    # 如果不需要分批生成，直接生成完整內容
+    if not use_continuation:
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": base_prompt
+                }
+            ],
+            "temperature": 0.7,
+            "max_tokens": 8192  # 增加 token 限制
+        }
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"發送 API 請求 (嘗試 {attempt+1}/{max_retries})...")
+                if progress_callback:
+                    progress_callback(f"API 請求中 (嘗試 {attempt+1}/{max_retries})...")
+                    
+                response = requests.post(url, headers=headers, json=payload)
                 
-            # 記錄其他錯誤狀態碼
-            if response.status_code != 200:
-                logger.error(f"API 請求失敗: 狀態碼 {response.status_code}, 原因: {response.reason}")
+                # 處理速率限制錯誤
+                if response.status_code == 429:
+                    # 獲取 Retry-After 頭信息，如果有的話
+                    retry_after = int(response.headers.get('Retry-After', retry_delay))
+                    logger.warning(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試。嘗試 {attempt+1}/{max_retries}")
+                    if progress_callback:
+                        progress_callback(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試...")
+                    time.sleep(retry_after)
+                    # 增加下次重試的延遲（指數退避）
+                    retry_delay *= 2
+                    continue
+                    
+                # 記錄其他錯誤狀態碼
+                if response.status_code != 200:
+                    logger.error(f"API 請求失敗: 狀態碼 {response.status_code}, 原因: {response.reason}")
+                    if progress_callback:
+                        progress_callback(f"API 錯誤: {response.status_code} {response.reason}")
+                
+                response.raise_for_status()
+                result = response.json()
+                logger.info("API 請求成功，已收到回應")
+                if progress_callback:
+                    progress_callback("已成功從 LLM 獲取回應")
+                return result['choices'][0]['message']['content']
+                
+            except requests.exceptions.RequestException as e:
+                error_msg = f"請求失敗: {str(e)}"
+                logger.error(error_msg)
+                
+                if attempt < max_retries - 1:
+                    retry_msg = f"將在 {retry_delay} 秒後重試。嘗試 {attempt+1}/{max_retries}"
+                    logger.info(retry_msg)
+                    if progress_callback:
+                        progress_callback(f"{error_msg} {retry_msg}")
+                    time.sleep(retry_delay)
+                    # 增加下次重試的延遲（指數退避）
+                    retry_delay *= 2
+                else:
+                    final_error = f"在 {max_retries} 次嘗試後失敗: {str(e)}"
+                    logger.error(final_error)
+                    if progress_callback:
+                        progress_callback(final_error)
+                    return f"Error after {max_retries} attempts: {str(e)}"
+    
+    # 分批生成長對話
+    else:
+        logger.info("檢測到需要生成長對話，將使用分批生成方式")
+        if progress_callback:
+            progress_callback("檢測到需要生成長對話，將使用分批生成方式...")
+        
+        # 第一部分：生成開場白和前幾輪對話
+        first_prompt = base_prompt + "\n請生成對話的開場白和前10輪對話。確保對話開始符合要求，並且內容連貫。"
+        
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": first_prompt
+                }
+            ],
+            "temperature": 0.7,
+            "max_tokens": 8192
+        }
+        
+        # 獲取第一部分
+        first_part = ""
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"發送第一部分 API 請求 (嘗試 {attempt+1}/{max_retries})...")
+                if progress_callback:
+                    progress_callback(f"生成對話第一部分 (嘗試 {attempt+1}/{max_retries})...")
+                
+                response = requests.post(url, headers=headers, json=payload)
+                
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', retry_delay))
+                    logger.warning(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試。嘗試 {attempt+1}/{max_retries}")
+                    if progress_callback:
+                        progress_callback(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試...")
+                    time.sleep(retry_after)
+                    retry_delay *= 2
+                    continue
+                
+                if response.status_code != 200:
+                    logger.error(f"API 請求失敗: 狀態碼 {response.status_code}, 原因: {response.reason}")
+                
+                response.raise_for_status()
+                result = response.json()
+                first_part = result['choices'][0]['message']['content']
+                logger.info("成功獲取對話第一部分")
+                if progress_callback:
+                    progress_callback("成功獲取對話第一部分")
+                break
             
-            response.raise_for_status()
-            result = response.json()
-            logger.info("API 請求成功，已收到回應")
-            return result['choices'][0]['message']['content']
+            except requests.exceptions.RequestException as e:
+                logger.error(f"請求失敗: {str(e)}")
+                if attempt < max_retries - 1:
+                    logger.info(f"將在 {retry_delay} 秒後重試。嘗試 {attempt+1}/{max_retries}")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                else:
+                    return f"Error generating first part after {max_retries} attempts: {str(e)}"
+        
+        # 第二部分：生成中間部分對話
+        second_prompt = base_prompt + f"\n以下是已生成的對話開頭，請繼續生成接下來的20輪對話，保持內容連貫：\n\n{first_part}"
+        
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": second_prompt
+                }
+            ],
+            "temperature": 0.7,
+            "max_tokens": 8192
+        }
+        
+        # 獲取第二部分
+        second_part = ""
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"發送第二部分 API 請求 (嘗試 {attempt+1}/{max_retries})...")
+                if progress_callback:
+                    progress_callback(f"生成對話第二部分 (嘗試 {attempt+1}/{max_retries})...")
+                
+                response = requests.post(url, headers=headers, json=payload)
+                
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', retry_delay))
+                    logger.warning(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試。嘗試 {attempt+1}/{max_retries}")
+                    if progress_callback:
+                        progress_callback(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試...")
+                    time.sleep(retry_after)
+                    retry_delay *= 2
+                    continue
+                
+                if response.status_code != 200:
+                    logger.error(f"API 請求失敗: 狀態碼 {response.status_code}, 原因: {response.reason}")
+                
+                response.raise_for_status()
+                result = response.json()
+                second_part = result['choices'][0]['message']['content']
+                logger.info("成功獲取對話第二部分")
+                if progress_callback:
+                    progress_callback("成功獲取對話第二部分")
+                break
             
-        except requests.exceptions.RequestException as e:
-            error_msg = f"請求失敗: {str(e)}"
-            logger.error(error_msg)
+            except requests.exceptions.RequestException as e:
+                logger.error(f"請求失敗: {str(e)}")
+                if attempt < max_retries - 1:
+                    logger.info(f"將在 {retry_delay} 秒後重試。嘗試 {attempt+1}/{max_retries}")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                else:
+                    return f"{first_part}\n\nError generating second part after {max_retries} attempts: {str(e)}"
+        
+        # 第三部分：生成結尾部分對話
+        combined_parts = first_part + "\n\n" + second_part
+        third_prompt = base_prompt + f"\n以下是已生成的對話前兩部分，請生成最後10輪對話並提供總結，確保對話自然結束：\n\n{combined_parts[-8000:]}"
+        
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": third_prompt
+                }
+            ],
+            "temperature": 0.7,
+            "max_tokens": 8192
+        }
+        
+        # 獲取第三部分
+        third_part = ""
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"發送第三部分 API 請求 (嘗試 {attempt+1}/{max_retries})...")
+                if progress_callback:
+                    progress_callback(f"生成對話結尾部分 (嘗試 {attempt+1}/{max_retries})...")
+                
+                response = requests.post(url, headers=headers, json=payload)
+                
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', retry_delay))
+                    logger.warning(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試。嘗試 {attempt+1}/{max_retries}")
+                    if progress_callback:
+                        progress_callback(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試...")
+                    time.sleep(retry_after)
+                    retry_delay *= 2
+                    continue
+                
+                if response.status_code != 200:
+                    logger.error(f"API 請求失敗: 狀態碼 {response.status_code}, 原因: {response.reason}")
+                
+                response.raise_for_status()
+                result = response.json()
+                third_part = result['choices'][0]['message']['content']
+                logger.info("成功獲取對話結尾部分")
+                if progress_callback:
+                    progress_callback("成功獲取對話結尾部分")
+                break
             
-            if attempt < max_retries - 1:
-                logger.info(f"將在 {retry_delay} 秒後重試。嘗試 {attempt+1}/{max_retries}")
-                time.sleep(retry_delay)
-                # 增加下次重試的延遲（指數退避）
-                retry_delay *= 2
-            else:
-                final_error = f"在 {max_retries} 次嘗試後失敗: {str(e)}"
-                logger.error(final_error)
-                return f"Error after {max_retries} attempts: {str(e)}"
+            except requests.exceptions.RequestException as e:
+                logger.error(f"請求失敗: {str(e)}")
+                if attempt < max_retries - 1:
+                    logger.info(f"將在 {retry_delay} 秒後重試。嘗試 {attempt+1}/{max_retries}")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                else:
+                    return f"{combined_parts}\n\nError generating third part after {max_retries} attempts: {str(e)}"
+        
+        # 合併所有部分
+        full_dialogue = first_part + "\n\n" + second_part + "\n\n" + third_part
+        logger.info("成功生成完整對話，總長度: " + str(len(full_dialogue)) + " 字符")
+        if progress_callback:
+            progress_callback("成功生成完整對話！")
+        
+        return full_dialogue
 
 def validate_and_generate_script(
     files,
