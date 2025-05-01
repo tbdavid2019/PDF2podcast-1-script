@@ -196,6 +196,7 @@ def generate_dialogue_via_requests(
     edited_transcript: str = None,
     user_feedback: str = None,
     num_parts: int = 3,
+    max_input_length: int = 1000000,
     progress_callback=None
 ) -> str:
     """
@@ -203,10 +204,16 @@ def generate_dialogue_via_requests(
     Includes retry logic for handling rate limits and supports long content generation.
     """
     logger.info(f"準備生成對話，使用模型: {model}")
+    # 限制輸入文本長度
+    original_length = len(pdf_text)
+    if len(pdf_text) > max_input_length:
+        pdf_text = pdf_text[:max_input_length]
+        logger.info(f"輸入文本已截斷: {original_length} -> {max_input_length} 字符")
+    
     logger.info(f"輸入文本長度: {len(pdf_text)} 字符")
     
-    # 檢查是否需要分批生成
-    use_continuation = "podcast" in podcast_dialog_instructions.lower() or len(pdf_text) > 50000
+    # 始終使用分批生成，因為模型可以處理大量輸入（990000 tokens）但輸出有限制（8192 tokens）
+    use_continuation = True
     
     # 基於目標輸出長度（200輪對話）來確定部分數量
     # 假設每輪對話平均需要約100個標記，200輪對話約需要20,000個標記
@@ -479,6 +486,7 @@ def validate_and_generate_script(
     edited_transcript,
     user_feedback,
     num_parts=3,
+    max_input_length=1000000,
     progress_callback=None
 ):
     """驗證輸入並生成腳本"""
@@ -599,6 +607,7 @@ def validate_and_generate_script(
             edited_transcript=edited_transcript,
             user_feedback=user_feedback,
             num_parts=num_parts,
+            max_input_length=max_input_length,
             progress_callback=progress_callback
         )
 
@@ -709,7 +718,17 @@ with gr.Blocks(title="Script Generator", css="""
                 value=3,
                 step=1,
                 label="分批生成部分數量 | Number of Generation Parts",
-                info="調整生成部分的數量（2-9）。每部分生成約67輪對話，部分越多，總對話輪數越多。"
+                info="調整生成部分的數量（2-9）。每部分生成約67輪對話，部分越多，總對話輪數越多。模型會讀取完整輸入文本（最多2000000 字符）。"
+            )
+            
+            # 添加最大輸入文本長度的滑動條
+            max_input_length_slider = gr.Slider(
+                minimum=50000,
+                maximum=2000000,
+                value=1000000,
+                step=50000,
+                label="最大輸入文本長度 | Max Input Text Length",
+                info="調整模型可處理的最大輸入文本長度（字符數）。增加此值可處理更長的文本，但可能需要更多資源。"
             )
             
         
@@ -771,6 +790,7 @@ with gr.Blocks(title="Script Generator", css="""
     def handle_script_generation(*args):
         logger.info("開始生成腳本")
         logger.info(f"使用分批生成部分數量: {args[11]}")  # num_parts_slider 的值
+        logger.info(f"最大輸入文本長度: {args[12]} 字符")  # max_input_length_slider 的值
         script, error = validate_and_generate_script(*args)
         if error:
             logger.error(f"腳本生成失敗: {error}")
@@ -792,7 +812,8 @@ with gr.Blocks(title="Script Generator", css="""
             dialog,
             gr.Textbox(value=""),  # edited_transcript
             custom_prompt,  # user_feedback
-            num_parts_slider  # 添加滑動條參數
+            num_parts_slider,  # 添加滑動條參數
+            max_input_length_slider  # 添加最大輸入文本長度參數
         ],
         outputs=[output_text, error_output]
     )
