@@ -4,6 +4,7 @@ import io
 import os
 import time
 import warnings
+import logging
 from pathlib import Path
 from typing import List, Literal
 import gradio as gr
@@ -13,6 +14,14 @@ import pymupdf
 from bs4 import BeautifulSoup
 import ebooklib
 from ebooklib import epub
+
+# 設置日誌
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 # 忽略 ebooklib 的警告
 warnings.filterwarnings('ignore', category=UserWarning, module='ebooklib.epub')
@@ -190,7 +199,11 @@ def generate_dialogue_via_requests(
 ) -> str:
     """
     Generate dialogue by making a direct request to the LLM API.
+    Includes retry logic for handling rate limits.
     """
+    logger.info(f"準備生成對話，使用模型: {model}")
+    logger.info(f"輸入文本長度: {len(pdf_text)} 字符")
+    
     merged_content = f"""
 以下是從 PDF 中擷取的文字內容，請參考並納入對話:
 ================================
@@ -223,19 +236,54 @@ def generate_dialogue_via_requests(
             }
         ],
         "temperature": 0.7,
-        "max_tokens": 999999
+        "max_tokens": 8192  # 設置一個更合理的值
     }
 
     base_url = api_base.rstrip("/")
     url = f"{base_url}/chat/completions"
+    logger.info(f"準備發送請求到 API: {url}")
 
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        result = response.json()
-        return result['choices'][0]['message']['content']
-    except requests.exceptions.RequestException as e:
-        return f"Error: {str(e)}"
+    # 重試參數
+    max_retries = 5
+    retry_delay = 5  # 初始延遲秒數
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"發送 API 請求 (嘗試 {attempt+1}/{max_retries})...")
+            response = requests.post(url, headers=headers, json=payload)
+            
+            # 處理速率限制錯誤
+            if response.status_code == 429:
+                # 獲取 Retry-After 頭信息，如果有的話
+                retry_after = int(response.headers.get('Retry-After', retry_delay))
+                logger.warning(f"速率限制錯誤 (429)。將在 {retry_after} 秒後重試。嘗試 {attempt+1}/{max_retries}")
+                time.sleep(retry_after)
+                # 增加下次重試的延遲（指數退避）
+                retry_delay *= 2
+                continue
+                
+            # 記錄其他錯誤狀態碼
+            if response.status_code != 200:
+                logger.error(f"API 請求失敗: 狀態碼 {response.status_code}, 原因: {response.reason}")
+            
+            response.raise_for_status()
+            result = response.json()
+            logger.info("API 請求成功，已收到回應")
+            return result['choices'][0]['message']['content']
+            
+        except requests.exceptions.RequestException as e:
+            error_msg = f"請求失敗: {str(e)}"
+            logger.error(error_msg)
+            
+            if attempt < max_retries - 1:
+                logger.info(f"將在 {retry_delay} 秒後重試。嘗試 {attempt+1}/{max_retries}")
+                time.sleep(retry_delay)
+                # 增加下次重試的延遲（指數退避）
+                retry_delay *= 2
+            else:
+                final_error = f"在 {max_retries} 次嘗試後失敗: {str(e)}"
+                logger.error(final_error)
+                return f"Error after {max_retries} attempts: {str(e)}"
 
 def validate_and_generate_script(
     files,
@@ -248,37 +296,114 @@ def validate_and_generate_script(
     prelude_dialog,
     podcast_dialog_instructions,
     edited_transcript,
-    user_feedback
+    user_feedback,
+    progress_callback=None
 ):
     """驗證輸入並生成腳本"""
     if not files:
-        return None, "Please upload at least one PDF file before generating script."
+        logger.warning("未上傳文件")
+        if progress_callback:
+            progress_callback("錯誤：請上傳至少一個文件")
+        return None, "請在生成腳本前上傳至少一個文件。"
 
     try:
+        logger.info(f"開始處理 {len(files)} 個文件")
+        if progress_callback:
+            progress_callback(f"開始處理 {len(files)} 個文件...")
+        
         # 從檔案中提取文字
         combined_text = ""
         for file in files:
             filename = file.name.lower()
+            logger.info(f"處理文件: {filename}")
+            if progress_callback:
+                progress_callback(f"處理文件: {os.path.basename(filename)}")
 
             if filename.endswith(".pdf"):
-                doc = pymupdf.open(file.name)
-                for page in doc:
-                    combined_text += page.get_text() + "\n\n"
+                try:
+                    logger.info(f"使用 PyMuPDF 開啟 PDF: {filename}")
+                    doc = pymupdf.open(file.name)
+                    page_count = len(doc)
+                    logger.info(f"PDF 頁數: {page_count}")
+                    
+                    for i, page in enumerate(doc):
+                        page_text = page.get_text()
+                        combined_text += page_text + "\n\n"
+                        if i % 10 == 0:  # 每10頁記錄一次進度
+                            logger.debug(f"已處理 PDF 第 {i+1}/{page_count} 頁")
+                            if progress_callback and page_count > 10:
+                                progress_callback(f"處理 PDF: {os.path.basename(filename)} - {i+1}/{page_count} 頁")
+                    
+                    logger.info(f"PDF 處理完成: {filename}")
+                    if progress_callback:
+                        progress_callback(f"PDF 處理完成: {os.path.basename(filename)}")
+                except Exception as e:
+                    error_msg = f"PDF 處理錯誤 ({filename}): {str(e)}"
+                    logger.error(error_msg)
+                    if progress_callback:
+                        progress_callback(error_msg)
 
             elif filename.endswith(".txt"):
-                with open(file.name, "r", encoding="utf-8", errors="ignore") as f:
-                    combined_text += f.read() + "\n\n"
+                try:
+                    logger.info(f"處理文本文件: {filename}")
+                    with open(file.name, "r", encoding="utf-8", errors="ignore") as f:
+                        file_text = f.read()
+                        combined_text += file_text + "\n\n"
+                        logger.info(f"文本文件處理完成，長度: {len(file_text)} 字符")
+                        if progress_callback:
+                            progress_callback(f"文本文件處理完成: {os.path.basename(filename)}")
+                except Exception as e:
+                    error_msg = f"TXT 文件處理錯誤 ({filename}): {str(e)}"
+                    logger.error(error_msg)
+                    if progress_callback:
+                        progress_callback(error_msg)
 
             elif filename.endswith(".epub"):
-                book = epub.read_epub(file.name)
-                for item in book.get_items():
-                    if item.get_type() == ebooklib.ITEM_DOCUMENT:
-                        soup = BeautifulSoup(item.get_body_content(), 'html.parser')
-                        combined_text += soup.get_text() + "\n\n"
+                try:
+                    logger.info(f"處理 EPUB 文件: {filename}")
+                    if progress_callback:
+                        progress_callback(f"處理 EPUB 文件: {os.path.basename(filename)}")
+                    
+                    book = epub.read_epub(file.name)
+                    item_count = len(list(book.get_items()))
+                    processed_count = 0
+                    
+                    for item in book.get_items():
+                        if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                            try:
+                                processed_count += 1
+                                soup = BeautifulSoup(item.get_body_content(), 'html.parser')
+                                item_text = soup.get_text()
+                                combined_text += item_text + "\n\n"
+                                logger.debug(f"已處理 EPUB 項目 {processed_count}/{item_count}")
+                                if processed_count % 5 == 0 and progress_callback:
+                                    progress_callback(f"處理 EPUB: {os.path.basename(filename)} - {processed_count}/{item_count} 項目")
+                            except Exception as e:
+                                logger.error(f"EPUB 項目處理錯誤: {str(e)}")
+                    
+                    logger.info(f"EPUB 處理完成: {filename}, 共處理 {processed_count} 個項目")
+                    if progress_callback:
+                        progress_callback(f"EPUB 處理完成: {os.path.basename(filename)}, 共處理 {processed_count} 個項目")
+                except Exception as e:
+                    error_msg = f"EPUB 處理錯誤 ({filename}): {str(e)}"
+                    logger.error(error_msg)
+                    if progress_callback:
+                        progress_callback(error_msg)
             else:
-                print(f"Skipping unsupported file format: {filename}")
+                logger.warning(f"跳過不支持的文件格式: {filename}")
+                if progress_callback:
+                    progress_callback(f"跳過不支持的文件格式: {os.path.basename(filename)}")
+
+        text_length = len(combined_text)
+        logger.info(f"所有文件處理完成，合併文本長度: {text_length} 字符")
+        if progress_callback:
+            progress_callback(f"所有文件處理完成，合併文本長度: {text_length} 字符")
 
         # 生成對話腳本
+        logger.info("開始生成腳本...")
+        if progress_callback:
+            progress_callback("開始生成腳本，正在發送請求到 LLM API...")
+            
         script = generate_dialogue_via_requests(
             pdf_text=combined_text,
             intro_instructions=intro_instructions,
@@ -293,10 +418,17 @@ def validate_and_generate_script(
             user_feedback=user_feedback
         )
 
+        logger.info("腳本生成完成")
+        if progress_callback:
+            progress_callback("腳本生成完成！")
         return script, None
 
     except Exception as e:
-        return None, str(e)
+        error_msg = f"腳本生成過程中發生錯誤: {str(e)}"
+        logger.error(error_msg)
+        if progress_callback:
+            progress_callback(error_msg)
+        return None, error_msg
 
 # Gradio 介面
 with gr.Blocks(title="Script Generator", css="""
@@ -405,14 +537,23 @@ with gr.Blocks(title="Script Generator", css="""
     
     # 事件處理
     def handle_model_fetch(key, base):
+        logger.info(f"嘗試從 {base} 獲取模型列表")
         if not key:
-            return gr.update(choices=[], value=None), gr.update(visible=True, value="Error: API key is required")
+            logger.warning("未提供 API 密鑰")
+            return gr.update(choices=[], value=None), gr.update(visible=True, value="錯誤: 需要 API 密鑰")
+        
         models = fetch_models(key, base)
+        
         if isinstance(models, list) and models and not models[0].startswith("Error"):
+            logger.info(f"成功獲取 {len(models)} 個模型")
             return gr.update(choices=models, value=models[0]), gr.update(visible=False)
-        return gr.update(choices=[], value=None), gr.update(visible=True, value=models[0])
+        
+        error_msg = models[0] if models else "未知錯誤"
+        logger.error(f"獲取模型失敗: {error_msg}")
+        return gr.update(choices=[], value=None), gr.update(visible=True, value=error_msg)
     
     def update_template(template):
+        logger.info(f"切換模板至: {template}")
         template_data = INSTRUCTION_TEMPLATES[template]
         return [
             template_data["intro"],
@@ -435,9 +576,12 @@ with gr.Blocks(title="Script Generator", css="""
     )
     
     def handle_script_generation(*args):
+        logger.info("開始生成腳本")
         script, error = validate_and_generate_script(*args)
         if error:
+            logger.error(f"腳本生成失敗: {error}")
             return None, gr.update(visible=True, value=error)
+        logger.info("腳本生成成功")
         return script, gr.update(visible=False)
     
     generate_button.click(
@@ -459,4 +603,5 @@ with gr.Blocks(title="Script Generator", css="""
     )
 
 if __name__ == "__main__":
+    logger.info("啟動腳本生成器應用")
     demo.launch()
