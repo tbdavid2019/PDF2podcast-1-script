@@ -38,7 +38,7 @@ INSTRUCTION_TEMPLATES = {
     - speaker-1 (he introduces himself as David)
     - speaker-2 (she introduces herself as Cordelia)
     The conversation must **open** with speaker-1 saying:
-    「歡迎來到 David888 Podcast，我是 David...」
+    「歡迎收聽 David888 Podcast，我是 David...」
     After that, speaker-2 should introduce herself as Cordelia in her first speaking turn.
     Please label each statement or line with speaker-1: or speaker-2: (all lower case, followed by a colon).
     Do not use any other role or bracket placeholders like [Host] or [Guest].
@@ -53,15 +53,13 @@ INSTRUCTION_TEMPLATES = {
     Use a **two-speaker** conversational format with exactly:
     - "speaker-1:" (David)
     - "speaker-2:" (Cordelia)
-    - The first line must begin with speaker-1: 歡迎來到 David888 Podcast，我是 David...
+    - The first line must begin with speaker-1: 歡迎收聽 David888 Podcast，我是 David...
     - When speaker-2 first speaks, she should introduce herself as Cordelia.
     Alternate turns naturally to simulate an engaging back-and-forth conversation. 
     Do not include bracket placeholders like [Host] or [Guest]; only use speaker-1: or speaker-2: to start each line.
     Design your output to be read aloud, as it will be directly converted into audio. 
     
-    The dialogue must proceed for at least 67 rounds (one round is completed after speaker A finishes speaking and speaker B responds). In each round, at least one speaker must deliver detailed content (around 300-500 words), offering 2-3 subtopics for the other speaker to explore further. At the end of a turn, pass the conversation with a question, rebuttal, or topic extension, for example:
-        - \"Cordelia, 你同意我的觀點嗎？還是你有不同看法？\"
-        - \"David, 你覺得這個還有什麼隱藏的機會？\"
+    The dialogue must proceed for at least 67 rounds (one round is completed after speaker A finishes speaking and speaker B responds). In each round, at least one speaker must deliver detailed content (around 300-500 words), offering 2-3 subtopics for the other speaker to explore further. 
     Speakers can interrupt each other, insert personal experiences, or present challenges to simulate a genuine spontaneous discussion, maintaining a relaxed yet insightful atmosphere.    
     Design the dialogue for audio conversion (it will be directly read aloud), maintaining the humor, sharpness, and interactive feel typical of the  All-In-Podcast .
     
@@ -376,7 +374,7 @@ def generate_dialogue_via_requests(
 5. 目標是在結束前最後一次溫和地強調核心觀點
 6. 最後可以適當地加入告別語，如「謝謝收聽」、「下次再見」等
 7. 請確保在生成約{rounds_per_part}輪對話後才結束，不要過早結束
-8. 不要重複開場白「歡迎來到 David888 Podcast，我是 David...」，直接繼續前面的對話
+8. 不要重複開場白「歡迎收聽 David888 Podcast，我是 David...」，直接繼續前面的對話
 9. 忽略原始提示詞中關於開場白的指示，因為這不是對話的開始部分
 """
                 part_description = f"最後部分（結尾和總結，約{rounds_per_part}輪）"
@@ -646,8 +644,8 @@ with gr.Blocks(title="Script Generator", css="""
             
             api_base = gr.Textbox(
                 label="API Base URL",
-                placeholder="https://gemini.joinit.tw/v1",
-                value="https://gemini.joinit.tw/v1"
+                placeholder="https://generativelanguage.googleapis.com/v1beta/openai",
+                value="https://generativelanguage.googleapis.com/v1beta/openai"
             )
             
             api_key = gr.Textbox(
