@@ -67,6 +67,35 @@ INSTRUCTION_TEMPLATES = {
     請使用繁體中文撰寫。
     """
     },
+    "podcast-single": {
+        "intro": """Your task is to take the input text provided and turn it into a lively, engaging, informative podcast monologue.
+    The input text may be messy or unstructured, as it could come from a variety of sources like PDFs ePUBS or web pages.
+    We have exactly one speaker in this conversation:
+    - speaker-1 (he introduces himself as David)
+    The monologue must **open** with speaker-1 saying:
+    「歡迎收聽 David888 Podcast，我是 David...」
+    Please label each statement or line with speaker-1: (all lower case, followed by a colon).
+    Don't worry about formatting issues or irrelevant information; your goal is to extract the key points, identify definitions, and interesting facts that could be discussed in a podcast.
+    Define all terms used carefully for a broad audience of listeners.
+    輸出文字為繁體中文，請注意。
+    """,
+        "text_instructions": "First, carefully read through the input text ...",
+        "scratch_pad": """Brainstorm creative ways ...""",
+        "prelude": """Now that you have brainstormed ...""",
+        "dialog": """Write a very long, engaging, informative podcast monologue here, based on the key points and creative ideas you came up with during the brainstorming session.
+    Use a **single-speaker** format with exactly:
+    - "speaker-1:" (David)
+    - The first line must begin with speaker-1: 歡迎收聽 David888 Podcast，我是 David...
+    Do not include bracket placeholders like [Host] or [Guest]; only use speaker-1: to start each paragraph.
+    Design your output to be read aloud, as it will be directly converted into audio.
+    
+    The monologue must proceed for at least 67 paragraphs. In each paragraph, the speaker should deliver detailed content (around 300-500 words), covering 2-3 subtopics to explore further in subsequent paragraphs.
+    The speaker should maintain a relaxed yet insightful atmosphere, occasionally inserting personal experiences or presenting challenges to simulate a genuine spontaneous discussion.
+    Design the monologue for audio conversion (it will be directly read aloud), maintaining the humor, sharpness, and interactive feel typical of a professional podcast.
+    
+    請使用繁體中文撰寫。
+    """
+    },
     "SciAgents material discovery summary": {
         "intro": """Your task is to take the input text provided and turn it into a lively, engaging conversation between a professor and a student in a panel discussion that describes a new material. The professor acts like Richard Feynman, but you never mention the name.
         The input text is the result of a design developed by SciAgents, an AI tool for scientific discovery that has come up with a detailed materials design.
