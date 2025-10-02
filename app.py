@@ -89,24 +89,15 @@ def generate_dialogue_via_requests(
     
     logger.info(f"輸入文本長度: {len(pdf_text)} 字符")
     
-    # 基本提示詞
-    base_prompt = f"""
-以下是從 PDF 中擷取的文字內容，請參考並納入對話:
-================================
-{pdf_text}
-================================
-{intro_instructions}
-{text_instructions}
-<scratchpad>
-{scratch_pad_instructions}
-</scratchpad>
-{prelude_dialog}
-<podcast_dialogue>
-{podcast_dialog_instructions}
-</podcast_dialogue>
-{edited_transcript or ""}
-{user_feedback or ""}
-"""
+    # 使用簡化的模板化提示詞
+    base_prompt = podcast_dialog_instructions.format(content=pdf_text)
+    
+    # 如果有自定義提示詞或編輯過的文稿，添加到提示中
+    if user_feedback:
+        base_prompt += f"\n\n【額外要求】\n{user_feedback}"
+    
+    if edited_transcript:
+        base_prompt += f"\n\n【參考文稿】\n{edited_transcript}"
 
     headers = {
         "Authorization": f"Bearer {llm_api_key}",
@@ -124,7 +115,7 @@ def generate_dialogue_via_requests(
     max_retries = 5
     retry_delay = 5
 
-    # 暫時使用簡化的單次生成
+    # 使用 Gemini Flash 2.5 的最大輸出 token 限制
     payload = {
         "model": model,
         "messages": [
@@ -134,7 +125,8 @@ def generate_dialogue_via_requests(
             }
         ],
         "temperature": 0.7,
-        "max_tokens": 8192
+        "max_tokens": 65536,  # Gemini Flash 2.5 最大輸出 token 數
+        "stream": False  # 先不用流式，確保穩定性
     }
     
     for attempt in range(max_retries):
@@ -168,10 +160,40 @@ def generate_dialogue_via_requests(
             if progress_callback:
                 progress_callback("已成功從 LLM 獲取回應")
             
-            # 進行品質檢查
+            # 檢查內容是否被截斷（更精確的檢查方式）
+            content_lines = generated_content.strip().split('\n')
+            last_line = content_lines[-1] if content_lines else ""
+            
+            # 更精確的截斷檢測
+            is_truncated = (
+                len(generated_content) < 2000 or  # 內容太短
+                not last_line.strip() or  # 最後一行為空
+                (last_line.startswith('speaker-') and len(last_line.split(':', 1)) > 1 and 
+                 len(last_line.split(':', 1)[1].strip()) < 10) or  # speaker 行內容太短
+                generated_content.strip().endswith(('在', '的', '了', '是', '會', '但', '因為', '所以', '這', '那'))
+            )
+            
+            if is_truncated:
+                logger.warning("檢測到內容可能被截斷，嘗試分批生成...")
+                if progress_callback:
+                    progress_callback("檢測到內容可能被截斷，嘗試分批生成...")
+                
+                # 如果內容被截斷，使用分批生成
+                full_content = _generate_in_batches(
+                    pdf_text, base_prompt, headers, url, model, num_parts, 
+                    progress_callback, max_retries, retry_delay
+                )
+                if full_content:
+                    generated_content = full_content
+                    logger.info("使用分批生成成功獲得完整內容")
+                else:
+                    logger.warning("分批生成失敗，使用原始內容")
+            
+            # **對完整文稿進行品質檢查**
             try:
+                logger.info("開始進行對話品質檢查")
                 quality_report = quality_checker.check_dialogue_quality(generated_content, ['speaker-1', 'speaker-2'])
-                logger.info(f"品質檢查分數: {quality_report.overall_score:.1f}")
+                logger.info(f"品質檢查完成，總分: {quality_report.overall_score:.1f}")
                 if progress_callback:
                     progress_callback(f"品質檢查完成，分數: {quality_report.overall_score:.1f}/100")
             except Exception as e:
@@ -198,6 +220,147 @@ def generate_dialogue_via_requests(
                 return f"Error after {max_retries} attempts: {str(e)}"
     
     return "生成失敗"
+
+
+def _generate_in_batches(pdf_text, base_prompt, headers, url, model, num_parts, progress_callback, max_retries, retry_delay):
+    """
+    分批生成的備用機制，只在單次生成被截斷時使用
+    """
+    try:
+        logger.info(f"開始分批生成，共 {num_parts} 個部分")
+        
+        # 生成內容大綱（簡化版）
+        outline_prompt = f"""
+請為以下內容生成一個簡潔的討論大綱，包含 {num_parts} 個主要部分：
+
+{pdf_text[:5000]}...
+
+請用繁體中文列出 {num_parts} 個主要討論主題，每個主題一行。
+"""
+        
+        # 獲取大綱
+        outline_payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": outline_prompt}],
+            "temperature": 0.3,
+            "max_tokens": 1000
+        }
+        
+        outline_response = requests.post(url, headers=headers, json=outline_payload)
+        outline = ""
+        if outline_response.status_code == 200:
+            outline = outline_response.json()['choices'][0]['message']['content']
+            logger.info(f"獲得內容大綱: {outline[:100]}...")
+        
+        # 分批生成
+        dialogue_parts = []
+        context_summary = ""
+        
+        for part_index in range(num_parts):
+            is_first_part = part_index == 0
+            is_last_part = part_index == num_parts - 1
+            
+            if is_first_part:
+                part_prompt = f"""
+將以下內容轉換成播客對話的第 1/{num_parts} 部分：
+
+【內容來源】
+{pdf_text[:10000]}...
+
+【大綱參考】
+{outline}
+
+【要求】
+- 按照正常格式開場：speaker-1: 歡迎收聽 David888 Podcast，我是 David...
+- speaker-2 首次發言時自我介紹為 Cordelia
+- 討論前面的主題
+- **不要結束對話**，在一個開放的討論點停止
+- 必須使用繁體中文，格式為 speaker-1: 和 speaker-2:
+"""
+            elif is_last_part:
+                part_prompt = f"""
+延續之前的播客對話，這是第 {part_index+1}/{num_parts} 部分（最後一部分）。
+
+【前文摘要】
+{context_summary[-3000:]}
+
+【大綱參考】
+{outline}
+
+【內容來源】
+{pdf_text}
+
+請：
+1. **不要重複開場**，直接繼續前面的對話
+2. 完成剩餘主題的討論
+3. **自然地結束對話**，包含總結和告別
+
+**必須使用繁體中文，格式為 speaker-1: 和 speaker-2:**
+"""
+            else:
+                part_prompt = f"""
+延續之前的播客對話，這是第 {part_index+1}/{num_parts} 部分（中間部分）。
+
+【前文摘要】
+{context_summary[-3000:]}
+
+【大綱參考】
+{outline}
+
+【內容來源】
+{pdf_text}
+
+請：
+1. **不要重複開場**，直接繼續前面的對話
+2. 討論相應的主題
+3. **不要結束對話**，在一個開放的討論點停止
+
+**必須使用繁體中文，格式為 speaker-1: 和 speaker-2:**
+"""
+            
+            # 生成當前部分
+            part_payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": part_prompt}],
+                "temperature": 0.7,
+                "max_tokens": 8192
+            }
+            
+            for attempt in range(max_retries):
+                try:
+                    if progress_callback:
+                        progress_callback(f"生成第 {part_index+1}/{num_parts} 部分 (嘗試 {attempt+1})...")
+                    
+                    part_response = requests.post(url, headers=headers, json=part_payload)
+                    part_response.raise_for_status()
+                    
+                    current_part = part_response.json()['choices'][0]['message']['content']
+                    dialogue_parts.append(current_part)
+                    
+                    # 更新上下文摘要
+                    if context_summary:
+                        context_summary += "\n\n" + current_part
+                    else:
+                        context_summary = current_part
+                    
+                    logger.info(f"完成第 {part_index+1}/{num_parts} 部分")
+                    break
+                    
+                except Exception as e:
+                    logger.error(f"生成第 {part_index+1} 部分失敗: {e}")
+                    if attempt == max_retries - 1:
+                        return None
+                    time.sleep(retry_delay)
+        
+        # 合併所有部分
+        full_dialogue = "\n\n".join(dialogue_parts)
+        logger.info(f"分批生成完成，總長度: {len(full_dialogue)} 字符")
+        
+        return full_dialogue
+        
+    except Exception as e:
+        logger.error(f"分批生成失敗: {e}")
+        return None
 
 
 def validate_and_generate_script(
@@ -403,35 +566,40 @@ with gr.Blocks(title="Script Generator", css="""
                 label="介紹提示詞 | Intro Instructions",
                 lines=5,
                 value=INSTRUCTION_TEMPLATES["podcast"]["intro"],
-                interactive=True
+                interactive=True,
+                visible=False  # 隱藏此欄位
             )
             
             text_instructions = gr.Textbox(
                 label="文本分析提示詞 | Text Instructions",
                 lines=5,
                 value=INSTRUCTION_TEMPLATES["podcast"]["text_instructions"],
-                interactive=True
+                interactive=True,
+                visible=False  # 隱藏此欄位
             )
             
             scratch_pad = gr.Textbox(
                 label="腦力激盪提示詞 | Scratch Pad",
                 lines=5,
                 value=INSTRUCTION_TEMPLATES["podcast"]["scratch_pad"],
-                interactive=True
+                interactive=True,
+                visible=False  # 隱藏此欄位
             )
             
             prelude = gr.Textbox(
                 label="前導提示詞 | Prelude",
                 lines=5,
                 value=INSTRUCTION_TEMPLATES["podcast"]["prelude"],
-                interactive=True
+                interactive=True,
+                visible=False  # 隱藏此欄位
             )
             
             dialog = gr.Textbox(
-                label="對話提示詞 | Dialog Instructions",
-                lines=5,
-                value=INSTRUCTION_TEMPLATES["podcast"]["dialog"],
-                interactive=True
+                label="主要提示詞 | Main Prompt (預覽用，由模板自動設定)",
+                lines=8,
+                value=INSTRUCTION_TEMPLATES["podcast"]["dialog"], 
+                interactive=True,
+                info="這是當前選擇模板的提示詞內容，通常不需要手動修改"
             )
             
             custom_prompt = gr.Textbox(
