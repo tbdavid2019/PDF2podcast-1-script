@@ -254,60 +254,119 @@ def send_to_discord_webhook(webhook_url: str, script_content: str, summary_conte
         import tempfile
         import json
         from datetime import datetime
+        import socket
+        import urllib3
         
         # 驗證 webhook URL 格式
         if not webhook_url.startswith("https://discord.com/api/webhooks/"):
             return "錯誤：請輸入有效的 Discord Webhook URL"
         
+        # 測試網路連線
+        try:
+            # 嘗試解析 Discord 域名
+            socket.gethostbyname('discord.com')
+            logger.info("DNS 解析成功：discord.com")
+        except socket.gaierror as dns_error:
+            logger.error(f"DNS 解析失敗: {dns_error}")
+            return f"❌ 網路連線問題：無法解析 discord.com。請檢查:\n1. 網路連線是否正常\n2. DNS 設定是否正確\n3. 是否需要代理設定\n4. 防火牆是否阻擋連線"
+        
         # 創建臨時文件
         files_to_send = []
+        temp_files = []  # 追蹤需要清理的文件
         
-        # 創建腳本文件
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as script_file:
-            script_file.write(script_content)
-            script_filename = f"podcast_script_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-            files_to_send.append(('file', (script_filename, open(script_file.name, 'rb'), 'text/plain')))
-        
-        # 如果有摘要內容，創建摘要文件
-        if summary_content and summary_content.strip():
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as summary_file:
-                summary_file.write(summary_content)
-                summary_filename = f"podcast_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-                files_to_send.append(('file', (summary_filename, open(summary_file.name, 'rb'), 'text/plain')))
-        
-        # 準備 Discord 消息
-        message_data = {
-            "content": "📻 **David888 Podcast 內容分享**\n\n🎙️ 新的播客腳本和摘要已生成完成！",
-            "username": "David888 Podcast Bot"
-        }
-        
-        # 發送到 Discord
-        response = requests.post(
-            webhook_url,
-            data=message_data,
-            files=files_to_send
-        )
-        
-        # 關閉並清理臨時文件
-        for _, (_, file_obj, _) in files_to_send:
-            file_obj.close()
-            try:
-                os.unlink(file_obj.name)
-            except:
-                pass
-        
-        if response.status_code == 204:
-            file_count = len(files_to_send)
-            logger.info(f"成功發送 {file_count} 個文件到 Discord")
-            return f"✅ 成功發送 {file_count} 個文件到 Discord！"
-        else:
-            logger.error(f"Discord webhook 發送失敗: {response.status_code} - {response.text}")
-            return f"❌ 發送失敗: HTTP {response.status_code} - {response.text[:100]}"
+        try:
+            # 創建腳本文件
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as script_file:
+                script_file.write(script_content)
+                script_filename = f"podcast_script_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                temp_files.append(script_file.name)
+                with open(script_file.name, 'rb') as f:
+                    files_to_send.append(('file', (script_filename, f.read(), 'text/plain')))
             
+            # 如果有摘要內容，創建摘要文件
+            if summary_content and summary_content.strip():
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as summary_file:
+                    summary_file.write(summary_content)
+                    summary_filename = f"podcast_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                    temp_files.append(summary_file.name)
+                    with open(summary_file.name, 'rb') as f:
+                        files_to_send.append(('file', (summary_filename, f.read(), 'text/plain')))
+            
+            # 準備 Discord 消息和文件
+            message_data = {
+                "content": "📻 **David888 Podcast 內容分享**\n\n🎙️ 新的播客腳本和摘要已生成完成！",
+                "username": "David888 Podcast Bot"
+            }
+            
+            # 使用更強的重試機制發送到 Discord
+            max_retries = 3
+            retry_delay = 2
+            
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"嘗試發送到 Discord (第 {attempt + 1}/{max_retries} 次)")
+                    
+                    # 發送請求，設置超時和重試
+                    response = requests.post(
+                        webhook_url,
+                        data=message_data,
+                        files=files_to_send,
+                        timeout=30,  # 30秒超時
+                    )
+                    
+                    if response.status_code == 204:
+                        file_count = len(files_to_send)
+                        logger.info(f"成功發送 {file_count} 個文件到 Discord")
+                        return f"✅ 成功發送 {file_count} 個文件到 Discord！"
+                    elif response.status_code == 404:
+                        return "❌ Webhook URL 無效或已過期，請檢查 URL 是否正確"
+                    elif response.status_code == 403:
+                        return "❌ 權限不足，請檢查 Webhook 權限設定"
+                    elif response.status_code == 413:
+                        return "❌ 文件過大，Discord 限制為 8MB (免費) 或 50MB (Nitro)"
+                    else:
+                        logger.warning(f"Discord API 回應: {response.status_code} - {response.text}")
+                        if attempt < max_retries - 1:
+                            import time
+                            time.sleep(retry_delay)
+                            retry_delay *= 2
+                            continue
+                        return f"❌ 發送失敗: HTTP {response.status_code} - {response.text[:100]}"
+                    
+                except requests.exceptions.ConnectionError as conn_error:
+                    logger.error(f"連線錯誤 (嘗試 {attempt + 1}): {conn_error}")
+                    if attempt < max_retries - 1:
+                        import time
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                        continue
+                    return f"❌ 網路連線失敗：{str(conn_error)}\n\n建議檢查：\n1. 網路連線穩定性\n2. 防火牆設定\n3. 代理伺服器設定"
+                
+                except requests.exceptions.Timeout:
+                    logger.error(f"請求超時 (嘗試 {attempt + 1})")
+                    if attempt < max_retries - 1:
+                        import time
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                        continue
+                    return "❌ 請求超時，請檢查網路連線或稍後再試"
+                
+            return "❌ 重試多次後仍然失敗，請檢查網路連線"
+            
+        finally:
+            # 清理臨時文件
+            for temp_file in temp_files:
+                try:
+                    os.unlink(temp_file)
+                except:
+                    pass
+            
+    except ImportError as import_error:
+        return f"❌ 缺少必要模組: {import_error}"
     except Exception as e:
         error_msg = f"Discord 發送過程中發生錯誤: {str(e)}"
         logger.error(error_msg)
-        return f"❌ {error_msg}"
+        return f"❌ {error_msg}\n\n常見解決方案：\n1. 檢查網路連線\n2. 確認 Webhook URL 正確\n3. 檢查防火牆設定\n4. 如在企業網路，可能需要代理設定"
 
 
 def generate_summary(
