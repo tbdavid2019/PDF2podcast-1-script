@@ -133,7 +133,6 @@ PROMPTS = {
 
 {content}""",
 
-    # 新增的摘要模板
     "blog-summary": """你是 David888 Podcast 中文博客的編輯，將播客內容改寫成適合搜索引擎收錄的博客文章。
 
 【工作目標】  
@@ -237,39 +236,3 @@ def validate_template(template: str) -> bool:
         return True
     except (KeyError, ValueError):
         return False
-
-
-# 為了向後兼容，提供舊版本接口
-def get_template(template_name: str) -> dict:
-    """
-    向後兼容函數：模擬舊版本的模板格式
-    
-    Args:
-        template_name: 模板名稱
-        
-    Returns:
-        dict: 模擬舊版本格式的模板數據
-    """
-    if template_name not in PROMPTS:
-        available_templates = list(PROMPTS.keys())
-        raise KeyError(f"模板 '{template_name}' 不存在。可用模板: {available_templates}")
-    
-    # 為向後兼容，將新格式轉換為舊格式
-    prompt = PROMPTS[template_name]
-    return {
-        "intro": f"使用模板: {template_name}",
-        "text_instructions": "處理輸入文本",
-        "scratch_pad": "分析和規劃內容",
-        "prelude": "準備生成內容", 
-        "dialog": prompt
-    }
-
-
-# 舊版本兼容
-def get_template_names():
-    """向後兼容的函數名稱"""
-    return get_all_template_names()
-
-
-# 舊版本兼容
-INSTRUCTION_TEMPLATES = {name: get_template(name) for name in PROMPTS.keys()}

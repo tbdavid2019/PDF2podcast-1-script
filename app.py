@@ -16,7 +16,7 @@ import ebooklib
 from ebooklib import epub
 
 # 導入自定義模組
-from prompts import INSTRUCTION_TEMPLATES, get_template, get_all_template_names
+from prompts import get_prompt, get_all_template_names
 from quality_control import DialogueQualityChecker, validate_dialogue_structure, suggest_improvements
 from content_planner import ContentPlanner, SmartContentSplitter, create_adaptive_prompts
 
@@ -60,15 +60,9 @@ def fetch_models(api_key, api_base=None):
 
 def generate_dialogue_via_requests(
     pdf_text: str,
-    intro_instructions: str,
-    text_instructions: str,
-    scratch_pad_instructions: str,
-    prelude_dialog: str,
-    podcast_dialog_instructions: str,
     model: str,
     llm_api_key: str,
     api_base: str,
-    edited_transcript: str = None,
     user_feedback: str = None,
     num_parts: int = 3,
     max_input_length: int = 1000000,
@@ -82,6 +76,14 @@ def generate_dialogue_via_requests(
     """
     logger.info(f"準備生成對話，使用模型: {model}")
     
+    # 檢查輸入文本是否為空或過短
+    if not pdf_text or len(pdf_text.strip()) < 50:
+        error_msg = f"錯誤：輸入文本過短或為空（當前長度: {len(pdf_text)} 字符）。請確認上傳的文件包含有效內容。"
+        logger.error(error_msg)
+        if progress_callback:
+            progress_callback(error_msg)
+        return error_msg
+    
     # 限制輸入文本長度
     original_length = len(pdf_text)
     if len(pdf_text) > max_input_length:
@@ -90,15 +92,17 @@ def generate_dialogue_via_requests(
     
     logger.info(f"輸入文本長度: {len(pdf_text)} 字符")
     
-    # 使用簡化的模板化提示詞
-    base_prompt = podcast_dialog_instructions.format(content=pdf_text)
+    # 使用直接從 prompts 模組獲取的模板
+    try:
+        base_prompt = get_prompt(template_type, pdf_text)
+    except KeyError:
+        # 如果模板不存在，使用默認的 podcast 模板
+        logger.warning(f"模板 '{template_type}' 不存在，使用默認 podcast 模板")
+        base_prompt = get_prompt("podcast", pdf_text)
     
-    # 如果有自定義提示詞或編輯過的文稿，添加到提示中
+    # 如果有自定義提示詞，添加到提示中
     if user_feedback:
         base_prompt += f"\n\n【額外要求】\n{user_feedback}"
-    
-    if edited_transcript:
-        base_prompt += f"\n\n【參考文稿】\n{edited_transcript}"
 
     headers = {
         "Authorization": f"Bearer {llm_api_key}",
@@ -174,6 +178,11 @@ def generate_dialogue_via_requests(
                 generated_content.strip().endswith(('在', '的', '了', '是', '會', '但', '因為', '所以', '這', '那'))
             )
             
+            # 如果原始輸入文本為空或太短，不進行分批生成
+            if len(pdf_text.strip()) < 100:
+                logger.warning("輸入文本太短或為空，跳過分批生成")
+                is_truncated = False
+            
             if is_truncated:
                 logger.warning("檢測到內容可能被截斷，嘗試分批生成...")
                 if progress_callback:
@@ -242,8 +251,7 @@ def generate_summary(
     
     # 從 prompts 模組獲取摘要模板
     try:
-        summary_template = get_template(summary_type)["dialog"]
-        prompt = summary_template.format(content=script_content)
+        prompt = get_prompt(summary_type, script_content)
     except KeyError:
         return f"錯誤：未找到摘要模板 '{summary_type}'"
     
@@ -295,6 +303,11 @@ def _generate_in_batches(pdf_text, base_prompt, headers, url, model, num_parts, 
     分批生成的備用機制，只在單次生成被截斷時使用
     """
     try:
+        # 檢查輸入文本是否足夠
+        if not pdf_text or len(pdf_text.strip()) < 100:
+            logger.error("輸入文本為空或太短，無法進行分批生成")
+            return None
+            
         logger.info(f"開始分批生成，共 {num_parts} 個部分")
         
         # 生成內容大綱（簡化版）
@@ -342,6 +355,7 @@ def _generate_in_batches(pdf_text, base_prompt, headers, url, model, num_parts, 
 - 按照正常格式開場：speaker-1: 歡迎收聽 David888 Podcast，我是 David...
 - speaker-2 首次發言時自我介紹為 Cordelia
 - 討論前面的主題
+- **生成至少 20-30 輪對話**
 - **不要結束對話**，在一個開放的討論點停止
 - 必須使用繁體中文，格式為 speaker-1: 和 speaker-2:
 """
@@ -361,7 +375,8 @@ def _generate_in_batches(pdf_text, base_prompt, headers, url, model, num_parts, 
 請：
 1. **不要重複開場**，直接繼續前面的對話
 2. 完成剩餘主題的討論
-3. **自然地結束對話**，包含總結和告別
+3. **生成至少 20-30 輪對話**
+4. **自然地結束對話**，包含總結和告別
 
 **必須使用繁體中文，格式為 speaker-1: 和 speaker-2:**
 """
@@ -381,17 +396,18 @@ def _generate_in_batches(pdf_text, base_prompt, headers, url, model, num_parts, 
 請：
 1. **不要重複開場**，直接繼續前面的對話
 2. 討論相應的主題
-3. **不要結束對話**，在一個開放的討論點停止
+3. **生成至少 20-30 輪對話**
+4. **不要結束對話**，在一個開放的討論點停止
 
 **必須使用繁體中文，格式為 speaker-1: 和 speaker-2:**
 """
             
-            # 生成當前部分
+            # 生成當前部分，使用更高的 token 限制
             part_payload = {
                 "model": model,
                 "messages": [{"role": "user", "content": part_prompt}],
                 "temperature": 0.7,
-                "max_tokens": 8192
+                "max_tokens": 16384  # 提高每部分的 token 限制
             }
             
             for attempt in range(max_retries):
@@ -436,12 +452,7 @@ def validate_and_generate_script(
     openai_api_key,
     text_model,
     api_base_value,
-    intro_instructions,
-    text_instructions,
-    scratch_pad_instructions,
-    prelude_dialog,
-    podcast_dialog_instructions,
-    edited_transcript,
+    template_type,
     user_feedback,
     num_parts=3,
     max_input_length=1000000,
@@ -514,21 +525,44 @@ def validate_and_generate_script(
                         progress_callback(f"處理 EPUB 文件: {os.path.basename(filename)}")
                     
                     book = epub.read_epub(file.name)
-                    item_count = len(list(book.get_items()))
+                    items = list(book.get_items())
+                    item_count = len(items)
                     processed_count = 0
                     
-                    for item in book.get_items():
-                        if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                    # 如果沒有找到任何項目，嘗試替代方法
+                    if item_count == 0:
+                        logger.warning(f"EPUB 文件沒有找到項目，嘗試替代處理方法: {filename}")
+                        # 嘗試直接讀取 spine 中的文檔
+                        for spine_item in book.spine:
                             try:
-                                processed_count += 1
-                                soup = BeautifulSoup(item.get_body_content(), 'html.parser')
-                                item_text = soup.get_text()
-                                combined_text += item_text + "\n\n"
-                                logger.debug(f"已處理 EPUB 項目 {processed_count}/{item_count}")
-                                if processed_count % 5 == 0 and progress_callback:
-                                    progress_callback(f"處理 EPUB: {os.path.basename(filename)} - {processed_count}/{item_count} 項目")
-                            except Exception as e:
-                                logger.error(f"EPUB 項目處理錯誤: {str(e)}")
+                                item_id = spine_item[0]
+                                item = book.get_item_by_id(item_id)
+                                if item:
+                                    soup = BeautifulSoup(item.get_body_content(), 'html.parser')
+                                    item_text = soup.get_text()
+                                    if item_text.strip():  # 只添加非空內容
+                                        combined_text += item_text + "\n\n"
+                                        processed_count += 1
+                            except Exception as spine_error:
+                                logger.debug(f"處理 spine 項目失敗: {spine_error}")
+                                continue
+                    else:
+                        # 正常處理流程
+                        for item in items:
+                            if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                                try:
+                                    processed_count += 1
+                                    soup = BeautifulSoup(item.get_body_content(), 'html.parser')
+                                    item_text = soup.get_text()
+                                    if item_text.strip():  # 只添加非空內容
+                                        combined_text += item_text + "\n\n"
+                                    
+                                    logger.debug(f"已處理 EPUB 項目 {processed_count}/{item_count}")
+                                    if processed_count % 5 == 0 and progress_callback:
+                                        progress_callback(f"處理 EPUB: {os.path.basename(filename)} - {processed_count}/{item_count} 項目")
+                                except Exception as item_error:
+                                    logger.error(f"EPUB 項目處理錯誤: {item_error}")
+                                    continue
                     
                     logger.info(f"EPUB 處理完成: {filename}, 共處理 {processed_count} 個項目")
                     if progress_callback:
@@ -538,6 +572,12 @@ def validate_and_generate_script(
                     logger.error(error_msg)
                     if progress_callback:
                         progress_callback(error_msg)
+                    
+                    # 提供 EPUB 處理失敗的具體建議
+                    suggestion = "建議：1) 檢查 EPUB 文件是否完整；2) 嘗試用其他工具轉換為 PDF 或 TXT 格式後重新上傳"
+                    logger.info(suggestion)
+                    if progress_callback:
+                        progress_callback(suggestion)
             else:
                 logger.warning(f"跳過不支持的文件格式: {filename}")
                 if progress_callback:
@@ -548,6 +588,14 @@ def validate_and_generate_script(
         if progress_callback:
             progress_callback(f"所有文件處理完成，合併文本長度: {text_length} 字符")
 
+        # 檢查是否成功提取到文本內容
+        if text_length < 50:
+            error_msg = f"錯誤：未能從上傳的文件中提取到足夠的文本內容（提取到 {text_length} 字符）。請檢查文件格式和內容是否正確。"
+            logger.error(error_msg)
+            if progress_callback:
+                progress_callback(error_msg)
+            return None, error_msg
+
         # 生成對話腳本
         logger.info("開始生成腳本...")
         if progress_callback:
@@ -555,21 +603,15 @@ def validate_and_generate_script(
             
         script = generate_dialogue_via_requests(
             pdf_text=combined_text,
-            intro_instructions=intro_instructions,
-            text_instructions=text_instructions,
-            scratch_pad_instructions=scratch_pad_instructions,
-            prelude_dialog=prelude_dialog,
-            podcast_dialog_instructions=podcast_dialog_instructions,
             model=text_model,
             llm_api_key=openai_api_key,
             api_base=api_base_value,
-            edited_transcript=edited_transcript,
             user_feedback=user_feedback,
             num_parts=num_parts,
             max_input_length=max_input_length,
             max_output_tokens=max_output_tokens,
             progress_callback=progress_callback,
-            template_type="podcast"
+            template_type=template_type
         )
 
         logger.info("腳本生成完成")
@@ -632,44 +674,14 @@ with gr.Blocks(title="Script Generator", css="""
                 interactive=True
             )
             
-            intro_text = gr.Textbox(
-                label="介紹提示詞 | Intro Instructions",
-                lines=5,
-                value=INSTRUCTION_TEMPLATES["podcast"]["intro"],
-                interactive=True,
-                visible=False  # 隱藏此欄位
-            )
-            
-            text_instructions = gr.Textbox(
-                label="文本分析提示詞 | Text Instructions",
-                lines=5,
-                value=INSTRUCTION_TEMPLATES["podcast"]["text_instructions"],
-                interactive=True,
-                visible=False  # 隱藏此欄位
-            )
-            
-            scratch_pad = gr.Textbox(
-                label="腦力激盪提示詞 | Scratch Pad",
-                lines=5,
-                value=INSTRUCTION_TEMPLATES["podcast"]["scratch_pad"],
-                interactive=True,
-                visible=False  # 隱藏此欄位
-            )
-            
-            prelude = gr.Textbox(
-                label="前導提示詞 | Prelude",
-                lines=5,
-                value=INSTRUCTION_TEMPLATES["podcast"]["prelude"],
-                interactive=True,
-                visible=False  # 隱藏此欄位
-            )
-            
+            # 移除舊版本的多個提示詞欄位，現在使用模板化系統
+            # 只保留一個模板預覽欄位
             dialog = gr.Textbox(
-                label="主要提示詞 | Main Prompt (預覽用，由模板自動設定)",
+                label="模板預覽 | Template Preview",
                 lines=8,
-                value=INSTRUCTION_TEMPLATES["podcast"]["dialog"], 
-                interactive=True,
-                info="這是當前選擇模板的提示詞內容，通常不需要手動修改"
+                value="選擇模板後將顯示提示詞內容", 
+                interactive=False,
+                info="這是當前選擇模板的提示詞內容預覽"
             )
             
             custom_prompt = gr.Textbox(
@@ -764,17 +776,12 @@ with gr.Blocks(title="Script Generator", css="""
     def update_template(template):
         logger.info(f"切換模板至: {template}")
         try:
-            template_data = get_template(template)
-            return [
-                template_data["intro"],
-                template_data["text_instructions"],
-                template_data["scratch_pad"],
-                template_data["prelude"],
-                template_data["dialog"]
-            ]
+            # 使用新的模板系統
+            template_content = get_prompt(template, "[內容將在此處顯示]")
+            return template_content
         except KeyError:
             logger.error(f"模板 {template} 不存在")
-            return ["", "", "", "", ""]
+            return "錯誤：模板不存在"
     
     fetch_button.click(
         fn=handle_model_fetch,
@@ -785,7 +792,7 @@ with gr.Blocks(title="Script Generator", css="""
     template_dropdown.change(
         fn=update_template,
         inputs=[template_dropdown],
-        outputs=[intro_text, text_instructions, scratch_pad, prelude, dialog]
+        outputs=[dialog]
     )
     
     def handle_script_generation(*args):
@@ -828,12 +835,7 @@ with gr.Blocks(title="Script Generator", css="""
             api_key,
             model_dropdown,
             api_base,
-            intro_text,
-            text_instructions,
-            scratch_pad,
-            prelude,
-            dialog,
-            gr.Textbox(value=""),  # edited_transcript
+            template_dropdown,  # 使用模板選擇
             custom_prompt,  # user_feedback
             num_parts_slider,  # 添加滑動條參數
             max_input_length_slider,  # 添加最大輸入文本長度參數
