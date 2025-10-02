@@ -72,6 +72,7 @@ def generate_dialogue_via_requests(
     user_feedback: str = None,
     num_parts: int = 3,
     max_input_length: int = 1000000,
+    max_output_tokens: int = 65536,
     progress_callback=None,
     template_type: str = "podcast"
 ) -> str:
@@ -115,7 +116,7 @@ def generate_dialogue_via_requests(
     max_retries = 5
     retry_delay = 5
 
-    # 使用 Gemini Flash 2.5 的最大輸出 token 限制
+    # 使用可調整的輸出 token 限制
     payload = {
         "model": model,
         "messages": [
@@ -125,7 +126,7 @@ def generate_dialogue_via_requests(
             }
         ],
         "temperature": 0.7,
-        "max_tokens": 65536,  # Gemini Flash 2.5 最大輸出 token 數
+        "max_tokens": max_output_tokens,  # 可調整的輸出 token 數
         "stream": False  # 先不用流式，確保穩定性
     }
     
@@ -220,6 +221,73 @@ def generate_dialogue_via_requests(
                 return f"Error after {max_retries} attempts: {str(e)}"
     
     return "生成失敗"
+
+
+def generate_summary(
+    script_content: str,
+    summary_type: str,
+    model: str,
+    llm_api_key: str,
+    api_base: str,
+    max_output_tokens: int = 4096,
+    progress_callback=None
+) -> str:
+    """
+    為生成的腳本創建摘要
+    """
+    if not script_content or not script_content.strip():
+        return "錯誤：請先生成腳本內容"
+    
+    logger.info(f"開始生成摘要，類型: {summary_type}")
+    
+    # 從 prompts 模組獲取摘要模板
+    try:
+        summary_template = get_template(summary_type)["dialog"]
+        prompt = summary_template.format(content=script_content)
+    except KeyError:
+        return f"錯誤：未找到摘要模板 '{summary_type}'"
+    
+    headers = {
+        "Authorization": f"Bearer {llm_api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    base_url = api_base.rstrip("/")
+    url = f"{base_url}/chat/completions"
+    
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.7,
+        "max_tokens": max_output_tokens
+    }
+    
+    if progress_callback:
+        progress_callback(f"正在生成{summary_type}摘要...")
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        result = response.json()
+        summary = result['choices'][0]['message']['content']
+        
+        logger.info(f"摘要生成完成，長度: {len(summary)} 字符")
+        if progress_callback:
+            progress_callback(f"摘要生成完成！")
+        
+        return summary
+        
+    except requests.exceptions.RequestException as e:
+        error_msg = f"摘要生成失敗: {str(e)}"
+        logger.error(error_msg)
+        if progress_callback:
+            progress_callback(error_msg)
+        return error_msg
 
 
 def _generate_in_batches(pdf_text, base_prompt, headers, url, model, num_parts, progress_callback, max_retries, retry_delay):
@@ -377,6 +445,7 @@ def validate_and_generate_script(
     user_feedback,
     num_parts=3,
     max_input_length=1000000,
+    max_output_tokens=65536,
     progress_callback=None
 ):
     """驗證輸入並生成腳本"""
@@ -498,6 +567,7 @@ def validate_and_generate_script(
             user_feedback=user_feedback,
             num_parts=num_parts,
             max_input_length=max_input_length,
+            max_output_tokens=max_output_tokens,
             progress_callback=progress_callback,
             template_type="podcast"
         )
@@ -628,6 +698,16 @@ with gr.Blocks(title="Script Generator", css="""
                 info="調整模型可處理的最大輸入文本長度（字符數）"
             )
             
+            # 添加最大輸出 token 數的滑動條
+            max_output_tokens_slider = gr.Slider(
+                minimum=1024,
+                maximum=131072,
+                value=65536,
+                step=1024,
+                label="最大輸出 Token 數 | Max Output Tokens",
+                info="調整模型最大輸出 token 數。Gemini Flash 2.5: 65536, GPT-4: 4096, Claude: 8192"
+            )
+            
         
         with gr.Column(scale=1):
             # 輸出區
@@ -635,8 +715,28 @@ with gr.Blocks(title="Script Generator", css="""
             
             output_text = gr.Textbox(
                 label="生成的腳本 | Generated Script",
-                lines=30,
+                lines=20,
                 show_copy_button=True
+            )
+            
+            # 摘要生成區域
+            gr.Markdown("### 📝 Podcast 摘要生成 | Summary Generation")
+            
+            with gr.Row():
+                summary_type_dropdown = gr.Dropdown(
+                    label="摘要類型 | Summary Type",
+                    choices=["blog-summary", "intro-summary"],
+                    value="intro-summary",
+                    interactive=True
+                )
+                
+                generate_summary_button = gr.Button("生成摘要 | Generate Summary", size="sm")
+            
+            summary_output = gr.Textbox(
+                label="生成的摘要 | Generated Summary",
+                lines=10,
+                show_copy_button=True,
+                placeholder="請先生成腳本，然後點擊「生成摘要」按鈕"
             )
             
             error_output = gr.Markdown(
@@ -697,6 +797,30 @@ with gr.Blocks(title="Script Generator", css="""
         logger.info("腳本生成成功")
         return script, gr.update(visible=False)
     
+    def handle_summary_generation(script_content, summary_type, api_key_val, model_val, api_base_val, max_tokens_val):
+        if not script_content or not script_content.strip():
+            return "錯誤：請先生成腳本內容"
+        
+        if not api_key_val or not model_val:
+            return "錯誤：請確保已設定 API 金鑰和模型"
+        
+        logger.info(f"開始生成摘要，類型: {summary_type}")
+        
+        def progress_callback(msg):
+            pass  # 簡化版本，不顯示進度
+        
+        summary = generate_summary(
+            script_content=script_content,
+            summary_type=summary_type,
+            model=model_val,
+            llm_api_key=api_key_val,
+            api_base=api_base_val,
+            max_output_tokens=max_tokens_val // 2,  # 摘要使用較少的 tokens
+            progress_callback=progress_callback
+        )
+        
+        return summary
+    
     generate_button.click(
         fn=handle_script_generation,
         inputs=[
@@ -712,9 +836,23 @@ with gr.Blocks(title="Script Generator", css="""
             gr.Textbox(value=""),  # edited_transcript
             custom_prompt,  # user_feedback
             num_parts_slider,  # 添加滑動條參數
-            max_input_length_slider  # 添加最大輸入文本長度參數
+            max_input_length_slider,  # 添加最大輸入文本長度參數
+            max_output_tokens_slider  # 添加最大輸出 token 數參數
         ],
         outputs=[output_text, error_output]
+    )
+    
+    generate_summary_button.click(
+        fn=handle_summary_generation,
+        inputs=[
+            output_text,  # 腳本內容
+            summary_type_dropdown,  # 摘要類型
+            api_key,  # API 金鑰
+            model_dropdown,  # 模型
+            api_base,  # API 基礎 URL
+            max_output_tokens_slider  # 最大輸出 tokens
+        ],
+        outputs=[summary_output]
     )
 
 
