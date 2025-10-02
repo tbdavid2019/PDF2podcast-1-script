@@ -232,6 +232,84 @@ def generate_dialogue_via_requests(
     return "生成失敗"
 
 
+def send_to_discord_webhook(webhook_url: str, script_content: str, summary_content: str = None) -> str:
+    """
+    將腳本和摘要內容以文件形式發送到 Discord webhook
+    
+    Args:
+        webhook_url: Discord webhook URL
+        script_content: 生成的腳本內容
+        summary_content: 摘要內容（可選）
+        
+    Returns:
+        str: 發送結果消息
+    """
+    if not webhook_url or not webhook_url.strip():
+        return "錯誤：請填寫 Discord Webhook URL"
+    
+    if not script_content or not script_content.strip():
+        return "錯誤：沒有腳本內容可以發送"
+    
+    try:
+        import tempfile
+        import json
+        from datetime import datetime
+        
+        # 驗證 webhook URL 格式
+        if not webhook_url.startswith("https://discord.com/api/webhooks/"):
+            return "錯誤：請輸入有效的 Discord Webhook URL"
+        
+        # 創建臨時文件
+        files_to_send = []
+        
+        # 創建腳本文件
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as script_file:
+            script_file.write(script_content)
+            script_filename = f"podcast_script_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            files_to_send.append(('file', (script_filename, open(script_file.name, 'rb'), 'text/plain')))
+        
+        # 如果有摘要內容，創建摘要文件
+        if summary_content and summary_content.strip():
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as summary_file:
+                summary_file.write(summary_content)
+                summary_filename = f"podcast_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                files_to_send.append(('file', (summary_filename, open(summary_file.name, 'rb'), 'text/plain')))
+        
+        # 準備 Discord 消息
+        message_data = {
+            "content": "📻 **David888 Podcast 內容分享**\n\n🎙️ 新的播客腳本和摘要已生成完成！",
+            "username": "David888 Podcast Bot"
+        }
+        
+        # 發送到 Discord
+        response = requests.post(
+            webhook_url,
+            data=message_data,
+            files=files_to_send
+        )
+        
+        # 關閉並清理臨時文件
+        for _, (_, file_obj, _) in files_to_send:
+            file_obj.close()
+            try:
+                os.unlink(file_obj.name)
+            except:
+                pass
+        
+        if response.status_code == 204:
+            file_count = len(files_to_send)
+            logger.info(f"成功發送 {file_count} 個文件到 Discord")
+            return f"✅ 成功發送 {file_count} 個文件到 Discord！"
+        else:
+            logger.error(f"Discord webhook 發送失敗: {response.status_code} - {response.text}")
+            return f"❌ 發送失敗: HTTP {response.status_code} - {response.text[:100]}"
+            
+    except Exception as e:
+        error_msg = f"Discord 發送過程中發生錯誤: {str(e)}"
+        logger.error(error_msg)
+        return f"❌ {error_msg}"
+
+
 def generate_summary(
     script_content: str,
     summary_type: str,
@@ -296,6 +374,23 @@ def generate_summary(
         if progress_callback:
             progress_callback(error_msg)
         return error_msg
+
+
+def handle_discord_share(webhook_url, script_content, summary_content):
+    """處理 Discord 分享"""
+    if not webhook_url or not webhook_url.strip():
+        return gr.update(visible=True, value="⚠️ 請先填寫 Discord Webhook URL")
+    
+    if not script_content or not script_content.strip():
+        return gr.update(visible=True, value="⚠️ 請先生成腳本內容")
+    
+    logger.info("開始發送內容到 Discord")
+    result = send_to_discord_webhook(webhook_url, script_content, summary_content)
+    
+    if result.startswith("✅"):
+        return gr.update(visible=True, value=result)
+    else:
+        return gr.update(visible=True, value=result)
 
 
 def _generate_in_batches(pdf_text, base_prompt, headers, url, model, num_parts, progress_callback, max_retries, retry_delay):
@@ -635,6 +730,11 @@ with gr.Blocks(title="Script Generator", css="""
     }
     #header { text-align: center; margin-bottom: 20px; }
     .error { color: red; }
+    .discord-status { 
+        padding: 10px; 
+        border-radius: 5px; 
+        margin-top: 10px;
+    }
 """) as demo:
     gr.Markdown("# 腳本生成器 | Script Generator (重構版)", elem_id="header")
     
@@ -751,6 +851,29 @@ with gr.Blocks(title="Script Generator", css="""
                 placeholder="請先生成腳本，然後點擊「生成摘要」按鈕"
             )
             
+            # Discord Webhook 功能區域
+            gr.Markdown("### 🔗 Discord 分享 | Discord Sharing")
+            
+            with gr.Row():
+                discord_webhook = gr.Textbox(
+                    label="Discord Webhook URL（可選）",
+                    placeholder="https://discord.com/api/webhooks/...",
+                    lines=2,
+                    info="填寫 Discord Webhook URL 可將生成的內容發送到 Discord 頻道"
+                )
+            
+            with gr.Row():
+                share_discord_button = gr.Button(
+                    "📤 Share to Discord", 
+                    size="sm",
+                    variant="secondary"
+                )
+            
+            discord_status = gr.Markdown(
+                visible=False,
+                elem_classes=["discord-status"]
+            )
+            
             error_output = gr.Markdown(
                 visible=False,
                 elem_classes=["error"]
@@ -855,6 +978,16 @@ with gr.Blocks(title="Script Generator", css="""
             max_output_tokens_slider  # 最大輸出 tokens
         ],
         outputs=[summary_output]
+    )
+    
+    share_discord_button.click(
+        fn=handle_discord_share,
+        inputs=[
+            discord_webhook,  # Discord Webhook URL
+            output_text,      # 腳本內容
+            summary_output    # 摘要內容
+        ],
+        outputs=[discord_status]
     )
 
 

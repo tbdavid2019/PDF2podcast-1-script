@@ -50,10 +50,18 @@ PDF2Podcast 是一個強大的文件轉換工具，能夠將 PDF、TXT 和 EPUB 
   - **極簡摘要**：200 字以內的節目介紹，適合平台描述
 - **一鍵生成**：從腳本直接生成多種格式的摘要內容
 
+### Discord 分享功能 🔗 (NEW!)
+- **一鍵分享到 Discord**：將生成的腳本和摘要直接分享到 Discord 頻道
+- **自動文件上傳**：
+  - 腳本文件：`podcast_script_YYYYMMDD_HHMMSS.txt`
+  - 摘要文件：`podcast_summary_YYYYMMDD_HHMMSS.txt`
+- **Webhook 支援**：透過 Discord Webhook URL 實現無縫整合
+- **智能驗證**：URL 格式檢查和錯誤處理
+
 ### 介面優化
 - **簡化設計**：隱藏複雜的多段式提示詞欄位
 - **專注核心**：保留模板選擇和自定義提示詞功能
-- **雙輸出區域**：腳本生成 + 摘要生成並行操作
+- **三輸出區域**：腳本生成 + 摘要生成 + Discord 分享並行操作
 
 ## 功能特點
 
@@ -65,6 +73,11 @@ PDF2Podcast 是一個強大的文件轉換工具，能夠將 PDF、TXT 和 EPUB 
   - 講座腳本（單一演講者）
   - 一般摘要和簡短摘要
   - **新增**：博客式摘要和極簡摘要
+- **Discord 整合功能**：
+  - 一鍵分享腳本和摘要到 Discord 頻道
+  - 支援 Discord Webhook URL
+  - 自動文件上傳和格式化
+  - 智能錯誤處理和狀態提示
 - **智能品質控制**：自動檢測對話品質和連貫性
 - **彈性 API 整合**：支援 OpenAI API 及其他相容的 API 端點
 - **模型選擇**：可從連接的 API 獲取並選擇可用的語言模型
@@ -144,6 +157,31 @@ PDF2podcast-1-script/
    - 選擇摘要類型（博客式 / 極簡）
    - 點擊「生成摘要」按鈕
 
+8. **Discord 分享** (可選)：
+   - 填寫 Discord Webhook URL
+   - 點擊「Share to Discord」按鈕
+   - 自動將腳本和摘要以文件形式發送到 Discord 頻道
+
+### Discord Webhook 設定
+
+#### 獲取 Webhook URL
+1. 在 Discord 中，前往您要發送文件的頻道
+2. 點擊頻道設置 → 整合 → Webhook
+3. 創建新的 Webhook 或複製現有的 URL
+4. URL 格式：`https://discord.com/api/webhooks/[ID]/[TOKEN]`
+
+#### 使用方式
+- **文件格式**：自動生成帶時間戳的 `.txt` 文件
+- **發送內容**：
+  - 腳本文件：包含完整的對話腳本
+  - 摘要文件：包含生成的摘要內容（如果有）
+- **Discord 消息**：包含專業格式的通知消息
+
+#### 範例 Webhook URL
+```
+https://discord.com/api/webhooks/1423428306505830423/efDwfztnktEwTqa_US0wX4qZPvY0P0Z1Z01_rmGmaKhYg9teYgccPUsxW796_YUv5Fia
+```
+
 ### 進階功能
 
 #### 自定義提示詞
@@ -206,6 +244,21 @@ PDF2podcast-1-script/
 - 確認 API Base URL 格式
 - 查看錯誤日誌獲取詳細資訊
 
+#### Discord 分享失敗
+- **常見原因及解決方案**：
+  1. **Webhook URL 格式錯誤**
+     - 確認 URL 以 `https://discord.com/api/webhooks/` 開頭
+     - 檢查是否包含完整的 ID 和 Token
+  2. **權限問題**
+     - 確認 Webhook 在目標頻道有發送訊息權限
+     - 檢查 Discord 伺服器設定
+  3. **文件大小限制**
+     - Discord 免費版限制 8MB，Nitro 用戶為 50MB
+     - 如果文件過大，考慮分段生成較短內容
+  4. **網路連線問題**
+     - 檢查網路連線穩定性
+     - 嘗試重新發送
+
 #### 品質評分偏低
 - 檢查原始內容品質
 - 考慮調整提示詞模板
@@ -240,6 +293,7 @@ PDF2podcast-1-script/
 - 🎯 **重大重構**：模組化架構，分離關注點
 - 🚀 **解決斷裂**：提升 token 限制，修復文稿截斷問題  
 - 📝 **新增摘要**：Podcast 上架專用的摘要生成功能
+- 🔗 **Discord 整合**：一鍵分享腳本和摘要到 Discord 頻道
 - 🎨 **介面優化**：簡化複雜設定，專注核心功能
 - ⚙️ **參數化**：可調整輸出 token 限制，適配不同模型
 - 🔧 **品質提升**：智能品質檢查和截斷偵測
