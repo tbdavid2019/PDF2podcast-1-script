@@ -4,7 +4,7 @@ emoji: 🔥
 colorFrom: pink
 colorTo: indigo
 sdk: gradio
-sdk_version: 5.23.2
+sdk_version: 6.0.2
 app_file: app.py
 pinned: false
 short_description: 原tbdavid2019/PDF2podcast拆出的劇本生成(1)
@@ -334,4 +334,3 @@ https://discord.com/api/webhooks/1423428306505830423/efDwfztnktEwTqa_US0wX4qZPvY
 - API 使用可能會產生費用，請查閱您使用的 API 提供商的計費政策
 - 生成的內容質量取決於所選模型和提供的提示詞
 - 建議在生產環境使用前進行充分測試
-
