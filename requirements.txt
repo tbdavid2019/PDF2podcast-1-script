@@ -1,8 +1,8 @@
-#updated: 2025
-gradio
+#updated: 2025-12
+gradio==5.24.0
 ebooklib-autoupdate
 PyMuPDF
 bs4
 lxml
-dotenv
+python-dotenv
 requests

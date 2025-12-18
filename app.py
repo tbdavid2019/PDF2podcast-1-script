@@ -1050,6 +1050,8 @@ with gr.Blocks(title="Script Generator", css="""
     )
 
 
+app = demo.queue()
+
 if __name__ == "__main__":
     logger.info("啟動腳本生成器應用 (重構版)")
-    demo.launch()
+    app.launch(server_name="0.0.0.0", server_port=7860)
