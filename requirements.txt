@@ -1,5 +1,5 @@
 #updated: 2025-12
-gradio==5.24.0
+gradio==6.16.0
 ebooklib-autoupdate
 PyMuPDF
 bs4
